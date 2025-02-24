@@ -786,12 +786,19 @@
                               subMenuElement.getBoundingClientRect();
 
                               const subMenuWidth = 200; // TODO
-                              const showOnLeft = ((itemRect.right + subMenuWidth) > window.innerWidth);
+                              const showOnRight = (itemRect.right + subMenuWidth) < window.innerWidth;
+                              const showOnLeft = (itemRect.left - subMenuWidth) > 0;
 
-                              if (showOnLeft) {
-                                  self._showMenu(subMenu.id, itemRect.left - subMenuWidth, itemRect.top - 1);
-                              } else {
+                              if(showOnRight)
                                   self._showMenu(subMenu.id, itemRect.right - 5, itemRect.top - 1);
+                              else if (showOnLeft)
+                                  self._showMenu(subMenu.id, itemRect.left - subMenuWidth, itemRect.top - 1);
+                              else {
+                                  const spaceOnLeft = itemRect.left, spaceOnRight = window.innerWidth - itemRect.right;
+                                  if(spaceOnRight > spaceOnLeft) 
+                                      self._showMenu(subMenu.id, itemRect.right - 5 - (subMenuWidth - spaceOnRight), itemRect.top - 1);
+                                  else 
+                                      self._showMenu(subMenu.id, itemRect.left - spaceOnLeft, itemRect.top - 1);
                               }
 
                               lastSubMenu = subMenu;
@@ -8804,8 +8811,101 @@
           const isSafari = /Safari/i.test(userAgent) && !/Chrome/i.test(userAgent);
 
           return isIphone && isSafari;
+      },
+      isTouchDevice() {
+          return (
+              'ontouchstart' in window || //works for most devices
+              navigator.maxTouchPoints > 0 || //works for modern touch devices
+              navigator.mxMaxTouchPoints > 0 //works for older microsoft touch devices
+          )
       }
   };
+
+  function addContextMenuListener(elem, callback) {
+      if (!elem || !callback) return;
+
+      let timeout = null;
+      const longPressTimer = 500;
+      const MOVE_THRESHOLD = 3;
+      let startX, startY;
+
+      const touchStartHandler = (event) => {
+          event.preventDefault();
+          
+          if (timeout) {
+              clearTimeout(timeout);
+              timeout = null;
+          }
+          // If more than one finger touches the screen, cancel the timeout
+          if (event.touches.length > 1) return;
+
+          const touch = event.touches[0];
+          startX = touch.clientX;
+          startY = touch.clientY;
+
+          timeout = setTimeout(() => {
+              event.clientX = touch.clientX;
+              event.clientY = touch.clientY;
+              callback(event);
+              clearTimeout(timeout);
+              timeout = null;
+          }, longPressTimer);
+      };
+
+      const globalTouchStartHandler = (event) => {
+          // Cancel timeout if multiple touches are detected anywhere on the screen
+          if (event.touches.length > 1 && timeout) {
+              clearTimeout(timeout);
+              timeout = null;
+          }
+      };
+
+      const touchMoveHandler = (event) => {
+          if (!timeout) return;
+          const touch = event.touches[0];
+          const deltaX = Math.abs(touch.clientX - startX);
+          const deltaY = Math.abs(touch.clientY - startY);
+
+          if (deltaX > MOVE_THRESHOLD || deltaY > MOVE_THRESHOLD) {
+              clearTimeout(timeout);
+              timeout = null;
+          }
+      };
+
+      const touchEndHandler = (event) => {
+          event.preventDefault();
+          if (timeout) {
+              clearTimeout(timeout);
+              timeout = null;
+          }
+      };
+
+      const contextMenuHandler = (event) => {
+          callback(event);
+          event.preventDefault();
+          event.stopPropagation();
+      };
+      
+      if (os.isIphoneSafari()) {
+          elem.addEventListener('touchstart', touchStartHandler);
+          elem.addEventListener('touchmove', touchMoveHandler);
+          elem.addEventListener('touchend', touchEndHandler);
+          window.addEventListener('touchstart', globalTouchStartHandler);
+      } else {
+          elem.addEventListener('contextmenu', contextMenuHandler);
+      }
+
+      return function removeContextMenuListener() {
+          if (os.isIphoneSafari()) {
+              elem.removeEventListener('touchstart', touchStartHandler);
+              elem.removeEventListener('touchmove', touchMoveHandler);
+              elem.removeEventListener('touchend', touchEndHandler);
+              window.removeEventListener('touchstart', globalTouchStartHandler);
+          } else {
+              elem.removeEventListener('contextmenu', contextMenuHandler);
+          }
+      };
+  }
 
   /** @private */
   class Dot {
@@ -8920,41 +9020,10 @@
           }
 
           if (cfg.onContextMenu) {
-              if(os.isIphoneSafari()){
-                  dotClickable.addEventListener('touchstart', (event) => {
-                      event.preventDefault();
-                      if(this._timeout){
-                          clearTimeout(this._timeout);
-                          this._timeout = null;
-                      }
-                      this._timeout = setTimeout(() => {
-                          event.clientX = event.touches[0].clientX;
-                          event.clientY = event.touches[0].clientY;
-                          cfg.onContextMenu(event, this);
-                          clearTimeout(this._timeout);
-                          this._timeout = null;
-                      }, 500);
-                  });
-
-                  dotClickable.addEventListener('touchend', (event) => {
-                      event.preventDefault();
-                      //stops short touches from calling the timeout
-                      if(this._timeout) {
-                          clearTimeout(this._timeout);
-                          this._timeout = null;
-                      }
-                  } );
-
-              }
-              else {
-                  dotClickable.addEventListener('contextmenu', (event) => {
-                      console.log(event);
-                      cfg.onContextMenu(event, this);
-                      event.preventDefault();
-                      event.stopPropagation();
-                      console.log("Label context menu");
-                  });
-              }
+              const contextMenuCallback = (event) => {
+                  cfg.onContextMenu(event, this);
+              };
+              addContextMenuListener(dotClickable, contextMenuCallback);
               
           }
 
@@ -8967,12 +9036,12 @@
           this._x = x;
           this._y = y;
           var dotStyle = this._dot.style;
-          dotStyle["left"] = (Math.round(x) - 4) + 'px';
-          dotStyle["top"] = (Math.round(y) - 4) + 'px';
+          dotStyle["left"] = (Math.round(x) - 6) + 'px';
+          dotStyle["top"] = (Math.round(y) - 6) + 'px';
 
           var dotClickableStyle = this._dotClickable.style;
-          dotClickableStyle["left"] = (Math.round(x) - 9) + 'px';
-          dotClickableStyle["top"] = (Math.round(y) - 9) + 'px';
+          dotClickableStyle["left"] = (Math.round(x) - 14) + 'px';
+          dotClickableStyle["top"] = (Math.round(y) - 14) + 'px';
       }
 
       setFillColor(color) {
@@ -8987,12 +9056,16 @@
           this._dot.style.opacity = opacity;
       }
 
+      _updateVisibility() {
+          this._dot.style.visibility = this._dotClickable.style.visibility = this._visible && !this._culled ? "visible" : "hidden";
+      }
+
       setVisible(visible) {
           if (this._visible === visible) {
               return;
           }
           this._visible = !!visible;
-          this._dot.style.visibility = this._visible && !this._culled ? "visible" : "hidden";
+          this._updateVisibility();
       }
 
       setCulled(culled) {
@@ -9000,7 +9073,7 @@
               return;
           }
           this._culled = !!culled;
-          this._dot.style.visibility = this._visible && !this._culled ? "visible" : "hidden";
+          this._updateVisibility();
       }
 
       setClickable(clickable) {
@@ -9026,6 +9099,413 @@
           }
           if (this._dotClickable.parentElement) {
               this._dotClickable.parentElement.removeChild(this._dotClickable);
+          }
+      }
+  }
+
+  /** @private */
+  class Label {
+
+      constructor(parentElement, cfg = {}) {
+
+          this._highlightClass = "viewer-ruler-label-highlighted";
+
+          this._prefix = cfg.prefix || "";
+          this._x = 0;
+          this._y = 0;
+          this._visible = true;
+          this._culled = false;
+
+          this._label = document.createElement('div');
+          this._label.className += this._label.className ? ' viewer-ruler-label' : 'viewer-ruler-label';
+          this._timeout = null;
+
+          var label = this._label;
+          var style = label.style;
+
+          style["border-radius"] = 5 + "px";
+          style.color = "white";
+          style.padding = "4px";
+          style.border = "solid 1px";
+          style.background = "lightgreen";
+          style.position = "absolute";
+          style["z-index"] = cfg.zIndex === undefined ? "5000005" : cfg.zIndex;
+          style.width = "auto";
+          style.height = "auto";
+          style.visibility = "visible";
+          style.top = 0 + "px";
+          style.left = 0 + "px";
+          style["pointer-events"] = "all";
+          style["opacity"] = 1.0;
+          if (cfg.onContextMenu) ;
+          label.innerText = "";
+
+          parentElement.appendChild(label);
+
+          this.setPos(cfg.x || 0, cfg.y || 0);
+          this.setFillColor(cfg.fillColor);
+          this.setBorderColor(cfg.fillColor);
+          this.setText(cfg.text);
+
+          if (cfg.onMouseOver) {
+              label.addEventListener('mouseover', (event) => {
+                  cfg.onMouseOver(event, this);
+                  event.preventDefault();
+              });
+          }
+
+          if (cfg.onMouseLeave) {
+              label.addEventListener('mouseleave', (event) => {
+                  cfg.onMouseLeave(event, this);
+                  event.preventDefault();
+              });
+          }
+
+          if (cfg.onMouseWheel) {
+              label.addEventListener('wheel', (event) => {
+                  cfg.onMouseWheel(event, this);
+              });
+          }
+
+          if (cfg.onMouseDown) {
+              label.addEventListener('mousedown', (event) => {
+                  cfg.onMouseDown(event, this);
+                  event.stopPropagation();
+              });
+          }
+
+          if (cfg.onMouseUp) {
+              label.addEventListener('mouseup', (event) => {
+                  cfg.onMouseUp(event, this);
+                  event.stopPropagation();
+              });
+          }
+
+          if (cfg.onMouseMove) {
+              label.addEventListener('mousemove', (event) => {
+                  cfg.onMouseMove(event, this);
+              });
+          }
+
+          if (cfg.onContextMenu) {
+              const contextMenuCallback = (event) => {
+                  cfg.onContextMenu(event, this);
+              };
+              addContextMenuListener(label, contextMenuCallback);
+              
+          }
+      }
+
+      setPos(x, y) {
+          this._x = x;
+          this._y = y;
+          var style = this._label.style;
+          style["left"] = (Math.round(x) - 20) + 'px';
+          style["top"] = (Math.round(y) - 12) + 'px';
+      }
+
+      setPosOnWire(x1, y1, x2, y2) {
+          var x = x1 + ((x2 - x1) * 0.5);
+          var y = y1 + ((y2 - y1) * 0.5);
+          var style = this._label.style;
+          style["left"] = (Math.round(x) - 20) + 'px';
+          style["top"] = (Math.round(y) - 12) + 'px';
+      }
+
+      setPosBetweenWires(x1, y1, x2, y2, x3, y3) {
+          var x = (x1 + x2 + x3) / 3;
+          var y = (y1 + y2 + y3) / 3;
+          var style = this._label.style;
+          style["left"] = (Math.round(x) - 20) + 'px';
+          style["top"] = (Math.round(y) - 12) + 'px';
+      }
+
+      setText(text) {
+          this._label.innerHTML = this._prefix + (text || "");
+      }
+
+      setFillColor(color) {
+          this._fillColor = color || "lightgreen";
+          this._label.style.background =this._fillColor;
+      }
+
+      setBorderColor(color) {
+          this._borderColor = color || "black";
+          this._label.style.border = "solid 1px " + this._borderColor;
+      }
+
+      setOpacity(opacity) {
+          this._label.style.opacity = opacity;
+      }
+
+      _updateVisibility() {
+          this._label.style.visibility = this._visible && !this._culled ? "visible" : "hidden";
+      }
+
+      setVisible(visible) {
+          if (this._visible === visible) {
+              return;
+          }
+          this._visible = !!visible;
+          this._updateVisibility();
+      }
+
+      setCulled(culled) {
+          if (this._culled === culled) {
+              return;
+          }
+          this._culled = !!culled;
+          this._updateVisibility();
+      }
+
+      setHighlighted(highlighted) {
+          if (this._highlighted === highlighted) {
+              return;
+          }
+          this._highlighted = !!highlighted;
+          if (this._highlighted) {
+              this._label.classList.add(this._highlightClass);
+          } else {
+              this._label.classList.remove(this._highlightClass);
+          }
+      }
+
+      setClickable(clickable) {
+          this._label.style["pointer-events"] = (clickable) ? "all" : "none";
+      }
+
+      setPrefix(prefix) {
+          if(this._prefix === prefix){
+              return;
+          }
+          this._prefix = prefix;
+      }
+
+      destroy() {
+          if (this._label.parentElement) {
+              this._label.parentElement.removeChild(this._label);
+          }
+      }
+
+      
+  }
+
+  /** @private */
+  class Wire {
+
+      constructor(parentElement, cfg = {}) {
+
+          this._color = cfg.color || "black";
+          this._highlightClass = "viewer-ruler-wire-highlighted";
+
+          this._wire = document.createElement('div');
+          this._wire.className += this._wire.className ? ' viewer-ruler-wire' : 'viewer-ruler-wire';
+
+          this._wireClickable = document.createElement('div');
+          this._wireClickable.className += this._wireClickable.className ? ' viewer-ruler-wire-clickable' : 'viewer-ruler-wire-clickable';
+
+          this._thickness = cfg.thickness || 1.0;
+          this._thicknessClickable = cfg.thicknessClickable || 6.0;
+
+          this._visible = true;
+          this._culled = false;
+
+          var wire = this._wire;
+          var wireStyle = wire.style;
+
+          wireStyle.border = "solid " + this._thickness + "px " + this._color;
+          wireStyle.position = "absolute";
+          wireStyle["z-index"] = cfg.zIndex === undefined ? "2000001" : cfg.zIndex;
+          wireStyle.width = 0 + "px";
+          wireStyle.height = 0 + "px";
+          wireStyle.visibility = "visible";
+          wireStyle.top = 0 + "px";
+          wireStyle.left = 0 + "px";
+          wireStyle['-webkit-transform-origin'] = "0 0";
+          wireStyle['-moz-transform-origin'] = "0 0";
+          wireStyle['-ms-transform-origin'] = "0 0";
+          wireStyle['-o-transform-origin'] = "0 0";
+          wireStyle['transform-origin'] = "0 0";
+          wireStyle['-webkit-transform'] = 'rotate(0deg)';
+          wireStyle['-moz-transform'] = 'rotate(0deg)';
+          wireStyle['-ms-transform'] = 'rotate(0deg)';
+          wireStyle['-o-transform'] = 'rotate(0deg)';
+          wireStyle['transform'] = 'rotate(0deg)';
+          wireStyle["opacity"] = 1.0;
+          wireStyle["pointer-events"] = "none";
+          if (cfg.onContextMenu) ;
+
+          parentElement.appendChild(wire);
+
+          var wireClickable = this._wireClickable;
+          var wireClickableStyle = wireClickable.style;
+
+          wireClickableStyle.border = "solid " + this._thicknessClickable + "px " + this._color;
+          wireClickableStyle.position = "absolute";
+          wireClickableStyle["z-index"] = cfg.zIndex === undefined ? "2000002" : (cfg.zIndex + 1);
+          wireClickableStyle.width = 0 + "px";
+          wireClickableStyle.height = 0 + "px";
+          wireClickableStyle.visibility = "visible";
+          wireClickableStyle.top = 0 + "px";
+          wireClickableStyle.left = 0 + "px";
+          // wireClickableStyle["pointer-events"] = "none";
+          wireClickableStyle['-webkit-transform-origin'] = "0 0";
+          wireClickableStyle['-moz-transform-origin'] = "0 0";
+          wireClickableStyle['-ms-transform-origin'] = "0 0";
+          wireClickableStyle['-o-transform-origin'] = "0 0";
+          wireClickableStyle['transform-origin'] = "0 0";
+          wireClickableStyle['-webkit-transform'] = 'rotate(0deg)';
+          wireClickableStyle['-moz-transform'] = 'rotate(0deg)';
+          wireClickableStyle['-ms-transform'] = 'rotate(0deg)';
+          wireClickableStyle['-o-transform'] = 'rotate(0deg)';
+          wireClickableStyle['transform'] = 'rotate(0deg)';
+          wireClickableStyle["opacity"] = 0.0;
+          wireClickableStyle["pointer-events"] = "none";
+          if (cfg.onContextMenu) ;
+
+          parentElement.appendChild(wireClickable);
+
+          if (cfg.onMouseOver) {
+              wireClickable.addEventListener('mouseover', (event) => {
+                  cfg.onMouseOver(event, this);
+              });
+          }
+
+          if (cfg.onMouseLeave) {
+              wireClickable.addEventListener('mouseleave', (event) => {
+                  cfg.onMouseLeave(event, this);
+              });
+          }
+
+          if (cfg.onMouseWheel) {
+              wireClickable.addEventListener('wheel', (event) => {
+                  cfg.onMouseWheel(event, this);
+              });
+          }
+
+          if (cfg.onMouseDown) {
+              wireClickable.addEventListener('mousedown', (event) => {
+                  cfg.onMouseDown(event, this);
+              });
+          }
+
+          if (cfg.onMouseUp) {
+              wireClickable.addEventListener('mouseup', (event) => {
+                  cfg.onMouseUp(event, this);
+              });
+          }
+
+          if (cfg.onMouseMove) {
+              wireClickable.addEventListener('mousemove', (event) => {
+                  cfg.onMouseMove(event, this);
+              });
+          }
+
+          if (cfg.onContextMenu) {
+              const contextMenuCallback = (event) => {
+                  cfg.onContextMenu(event, this);
+              };
+              addContextMenuListener(wireClickable, contextMenuCallback);
+              
+          }
+
+          this._x1 = 0;
+          this._y1 = 0;
+          this._x2 = 0;
+          this._y2 = 0;
+
+          this._update();
+      }
+
+      get visible() {
+          return this._wire.style.visibility === "visible";
+      }
+
+      _update() {
+
+          var length = Math.abs(Math.sqrt((this._x1 - this._x2) * (this._x1 - this._x2) + (this._y1 - this._y2) * (this._y1 - this._y2)));
+          var angle = Math.atan2(this._y2 - this._y1, this._x2 - this._x1) * 180.0 / Math.PI;
+
+          var wireStyle = this._wire.style;
+          wireStyle["width"] = Math.round(length) + 'px';
+          wireStyle["left"] = Math.round(this._x1) + 'px';
+          wireStyle["top"] = Math.round(this._y1) + 'px';
+          wireStyle['-webkit-transform'] =
+              wireStyle['-moz-transform'] =
+              wireStyle['-ms-transform'] =
+              wireStyle['-o-transform'] =
+              wireStyle['transform'] = 'rotate(' + angle + 'deg) translate(-' + this._thickness + 'px, -' + this._thickness + 'px)';
+
+          var wireClickableStyle = this._wireClickable.style;
+          wireClickableStyle["width"] = Math.round(length) + 'px';
+          wireClickableStyle["left"] = Math.round(this._x1) + 'px';
+          wireClickableStyle["top"] = Math.round(this._y1) + 'px';
+          wireClickableStyle['-webkit-transform'] =
+              wireClickableStyle['-moz-transform'] =
+              wireClickableStyle['-ms-transform'] =
+              wireClickableStyle['-o-transform'] =
+              wireClickableStyle['transform'] = 'rotate(' + angle + 'deg) translate(-' + this._thicknessClickable + 'px, -' + this._thicknessClickable + 'px)';
+      }
+
+      setStartAndEnd(x1, y1, x2, y2) {
+          this._x1 = x1;
+          this._y1 = y1;
+          this._x2 = x2;
+          this._y2 = y2;
+          this._update();
+      }
+
+      setColor(color) {
+          this._color = color || "black";
+          this._wire.style.border = "solid " + this._thickness + "px " + this._color;
+      }
+
+      setOpacity(opacity) {
+          this._wire.style.opacity = opacity;
+      }
+
+      _updateVisibility() {
+          this._wire.style.visibility = this._wireClickable.style.visibility = this._visible && !this._culled ? "visible" : "hidden";
+      }
+
+      setVisible(visible) {
+          if (this._visible === visible) {
+              return;
+          }
+          this._visible = !!visible;
+          this._updateVisibility();
+      }
+
+      setCulled(culled) {
+          if (this._culled === culled) {
+              return;
+          }
+          this._culled = !!culled;
+          this._updateVisibility();
+      }
+
+      setClickable(clickable) {
+          this._wireClickable.style["pointer-events"] = (clickable) ? "all" : "none";
+      }
+
+      setHighlighted(highlighted) {
+          if (this._highlighted === highlighted) {
+              return;
+          }
+          this._highlighted = !!highlighted;
+          if (this._highlighted) {
+              this._wire.classList.add(this._highlightClass);
+          } else {
+              this._wire.classList.remove(this._highlightClass);
+          }
+      }
+
+      destroy(visible) {
+          if (this._wire.parentElement) {
+              this._wire.parentElement.removeChild(this._wire);
+          }
+          if (this._wireClickable.parentElement) {
+              this._wireClickable.parentElement.removeChild(this._wireClickable);
           }
       }
   }
@@ -9207,6 +9687,11 @@
            * The {@link SceneModel} to which this SceneModelEntity belongs.
            */
           this.model = model;
+
+          /**
+           * Identifies if it's a SceneModelEntity
+           */
+          this.isSceneModelEntity = true;
 
           /**
            * The {@link SceneModelMesh}es belonging to this SceneModelEntity.
@@ -10119,28 +10604,13 @@
        * @type {Entity}
        */
       set entity(entity) {
-          if (this._entity) {
-              if (this._entity === entity) {
-                  return;
-              }
-              if (this._onEntityDestroyed !== null) {
-                  if (this._entity.model) {
-                      this._entity.model.off(this._onEntityDestroyed);
-                  } else {
-                      this._entity.off(this._onEntityDestroyed);
-                  }
-                  this._onEntityDestroyed = null;
-              }
-              if (this._onEntityModelDestroyed !== null) {
-                  if (this._entity.model) {
-                      this._entity.model.off(this._onEntityModelDestroyed);
-                  }
-                  this._onEntityModelDestroyed = null;
-              }
+          if (this._entity === entity) {
+              return;
           }
+          this._cleanupDestroyedHandlers();
           this._entity = entity;
           if (this._entity) {
-              if (this._entity instanceof SceneModelEntity) {
+              if (this._entity.isSceneModelEntity) {
                   this._onEntityModelDestroyed = this._entity.model.on("destroyed", () => { // SceneModelEntity does not fire events, and cannot exist beyond its VBOSceneModel
                       this._entity = null; // Marker now may become visible, if it was synched to invisible Entity
                       this._onEntityModelDestroyed = null;
@@ -10302,18 +10772,42 @@
           this.fire("destroyed", true);
           this.scene.camera.off(this._onCameraViewMatrix);
           this.scene.camera.off(this._onCameraProjMatrix);
-          if (this._entity) {
-              if (this._onEntityDestroyed !== null) {
-                  this._entity.model.off(this._onEntityDestroyed);
-              }
-              if (this._onEntityModelDestroyed !== null) {
-                  this._entity.model.off(this._onEntityModelDestroyed);
-              }
-          }
+          this._cleanupDestroyedHandlers();
           this._renderer.removeMarker(this);
           super.destroy();
       }
+
+      _cleanupDestroyedHandlers() {
+          if (this._entity) {
+              if (this._onEntityDestroyed !== null) {
+                  if (this._entity.model) {
+                      this._entity.model.off(this._onEntityDestroyed);
+                  } else {
+                      this._entity.off(this._onEntityDestroyed);
+                  }
+                  this._onEntityDestroyed = null;
+              }
+              if (this._onEntityModelDestroyed !== null) {
+                  if (this._entity.model) {
+                      this._entity.model.off(this._onEntityModelDestroyed);
+                  }
+                  this._onEntityModelDestroyed = null;
+              }
+          }
+      }
   }
+
+  const tmpVec2a = math.vec2();
+  const tmpVec2b = math.vec2();
+  const tmpVec2c = math.vec2();
+  const tmpVec2d = math.vec2();
+  const tmpVec3a$2 = math.vec3();
+  const tmpVec3b$2 = math.vec3();
+  const tmpVec4a = math.vec4();
+  const tmpVec4b = math.vec4();
+  const tmpVec4c = math.vec4();
+  const tmpVec4d = math.vec4();
+  const tmpMat4  = math.mat4();
 
   function transformToNode(from, to, vec) {
       const fromRec = from.getBoundingClientRect();
@@ -10321,9 +10815,132 @@
       vec[0] += fromRec.left - toRec.left;
       vec[1] += fromRec.top  - toRec.top;
   }
+  const toClipSpace = (camera, worldPos, p) => {
+      // The reason the projMatrix is explicitely fetched as below is a complex callback chain
+      // leading from a boundary update to a viewMatrix and projMatrix updates, which change their values
+      // in the mid of the toClipSpace, leading to incorrect values.
+      // The fetch ensures that matrix values are stabilized before used to transform worldPos to p.
+      // Better solution would be to ensure that no mutually-triggered callbacks
+      // (like boundary => view/projMatrix in this situation) ever happen, so user code can rely
+      // on a callback running in a stable context.
+      tmpMat4.set(camera.viewMatrix);
+      tmpMat4.set(camera.projMatrix);
+      // to homogeneous coords
+      p.set(worldPos);
+      p[3] = 1;
+
+      // to clip space
+      math.mulMat4v4(camera.viewMatrix, p, p);
+      math.mulMat4v4(camera.projMatrix, p, p);
+  };
+
+  const toCanvasSpace = (canvas, parentElement, ndc, p) => {
+      p[0] = (1 + ndc[0]) * 0.5 * canvas.offsetWidth;
+      p[1] = (1 - ndc[1]) * 0.5 * canvas.offsetHeight;
+      transformToNode(canvas, parentElement, p);
+  };
+
+  const clipSegment = (scene, parentElement, start, end, canvasStart, canvasEnd) => {
+      const camera = scene.camera;
+      const canvas = scene.canvas.canvas;
+
+      if (math.distVec3(start, end) < 0.001) {
+          return false;
+      }
+
+      const delta = math.subVec3(end, start, tmpVec3a$2);
+      let s_min = 0.0;
+      let s_max = 1.0;
+
+      for (let plane of scene._sectionPlanesState.sectionPlanes) {
+          const endDot   = math.dotVec3(plane.dir, math.subVec3(plane.pos, end,   tmpVec3b$2));
+          const startDot = math.dotVec3(plane.dir, math.subVec3(plane.pos, start, tmpVec3b$2));
+
+          if ((startDot > 0) && (endDot > 0)) {
+              return false;
+          } else if ((startDot > 0) || (endDot > 0)) {
+              const denom = math.dotVec3(plane.dir, delta);
+              if (Math.abs(denom) >= 1e-6) {
+                  const ratio = math.dotVec3(plane.dir, tmpVec3b$2) / denom;
+                  if (startDot > 0) {
+                      s_min = Math.max(s_min, ratio);
+                  } else {
+                      s_max = Math.min(s_max, ratio);
+                  }
+              }
+          }
+      }
+
+      const p0 = tmpVec4a;
+      const p1 = tmpVec4b;
+      toClipSpace(camera, (s_min > 0) ? math.addVec3(start, math.mulVec3Scalar(delta, s_min, tmpVec3b$2), tmpVec3b$2) : start, p0);
+      toClipSpace(camera, (s_max < 1) ? math.addVec3(start, math.mulVec3Scalar(delta, s_max, tmpVec3b$2), tmpVec3b$2) : end,   p1);
+
+      const p0Behind = ((p0[2] / p0[3]) < -1) || (p0[3] < 0);
+      const p1Behind = ((p1[2] / p1[3]) < -1) || (p1[3] < 0);
+      if (p0Behind && p1Behind) {
+          return false;
+      }
+
+      const t = (p0[3] + p0[2]) / ((p0[3] + p0[2]) - (p1[3] + p1[2]));
+
+      if ((t > 0) && (t < 1)) { //p0Behind || p1Behind) {
+          // Find the intersection of a segment with the near plane in clip space, if it exists."""
+          // Calculate the interpolation factor t where the line segment crosses the near plane
+          const delta = math.subVec4(p1, p0, tmpVec4c);
+          math.mulVec4Scalar(delta, t, delta);
+          math.addVec4(p0, delta, p0Behind ? p0 : p1);
+      }
+
+      // normalize clip space coords
+      math.mulVec4Scalar(p0, 1.0 / p0[3]);
+      math.mulVec4Scalar(p1, 1.0 / p1[3]);
+
+      let t_min = 0.0;
+      let t_max = 1.0;
+
+      // If either point is outside the view frustum, clip the line segment
+
+      for (let i = 0; i < 2; ++i) {
+          const denom = p1[i] - p0[i];
+
+          const l = (-p0[3] - p0[i]) / denom;
+          const r = ( p0[3] - p0[i]) / denom;
+
+          if (denom > 0) {
+              t_min = Math.max(t_min, l);
+              t_max = Math.min(t_max, r);
+          } else {
+              t_min = Math.max(t_min, r);
+              t_max = Math.min(t_max, l);
+          }
+      }
+
+      if (t_min >= t_max) {
+          return false;
+      }
+
+      // Calculate the clipped start and end points
+      const ndcDelta = math.subVec4(p1, p0, tmpVec4c);
+      math.addVec4(p0, math.mulVec4Scalar(ndcDelta, t_max, tmpVec4d), p1);
+      math.addVec4(p0, math.mulVec4Scalar(ndcDelta, t_min, tmpVec4d), p0);
+
+      math.mulVec4Scalar(p0, 1 / p0[3]);
+      math.mulVec4Scalar(p1, 1 / p1[3]);
+
+      toCanvasSpace(canvas, parentElement, p0, canvasStart);
+      toCanvasSpace(canvas, parentElement, p1, canvasEnd);
+
+      return true;
+  };
+
   class Dot3D extends Marker {
       constructor(scene, markerCfg, parentElement, cfg = {}) {
+          const camera = scene.camera;
+
           super(scene, markerCfg);
+
+          this.__visible = true;  // "__" to not interfere with Marker::_visible
 
           const handler = (cfgEvent, componentEvent) => {
               return event => {
@@ -10334,6 +10951,7 @@
               };
           };
           this._dot = new Dot(parentElement, {
+              borderColor: cfg.borderColor,
               fillColor: cfg.fillColor,
               zIndex: cfg.zIndex,
               onMouseOver:   handler(cfg.onMouseOver,   "mouseover"),
@@ -10348,19 +10966,62 @@
               onContextMenu: handler(cfg.onContextMenu, "contextmenu")
           });
 
+          const toClipSpace = (worldPos, p) => {
+              // to homogeneous coords
+              p.set(worldPos);
+              p[3] = 1;
+
+              // to clip space
+              math.mulMat4v4(camera.viewMatrix, p, p);
+              math.mulMat4v4(camera.projMatrix, p, p);
+          };
+
+          const toCanvasSpace = ndc => {
+              const canvas = scene.canvas.canvas;
+              ndc[0] = (1 + ndc[0]) * 0.5 * canvas.offsetWidth;
+              ndc[1] = (1 - ndc[1]) * 0.5 * canvas.offsetHeight;
+              transformToNode(canvas, parentElement, ndc);
+          };
+
           const updateDotPos = () => {
-              const pos = this.canvasPos.slice();
-              transformToNode(scene.canvas.canvas, parentElement, pos);
-              this._dot.setPos(pos[0], pos[1]);
+              if (! this.__visible) {
+                  return;
+              }
+              const p0 = tmpVec4c;
+              toClipSpace(this.worldPos, p0);
+              math.mulVec3Scalar(p0, 1.0 / p0[3]);
+
+              const outsideFrustum = ((p0[3] < 0)
+                                      ||
+                                      (p0[0] < -1) || (p0[0] > 1)
+                                      ||
+                                      (p0[1] < -1) || (p0[1] > 1)
+                                      ||
+                                      (p0[2] < -1) || (p0[2] > 1));
+              const culled = outsideFrustum || scene._sectionPlanesState.sectionPlanes.some(
+                  plane => (math.dotVec3(plane.dir, math.subVec3(plane.pos, this.worldPos, tmpVec3a$2)) > 0));
+
+              this._dot.setCulled(culled);
+              if (!culled) {
+                  toCanvasSpace(p0);
+                  this._dot.setPos(p0[0], p0[1]);
+              }
           };
 
           this.on("worldPos", updateDotPos);
 
-          const onViewMatrix = scene.camera.on("viewMatrix", updateDotPos);
-          const onProjMatrix = scene.camera.on("projMatrix", updateDotPos);
+          const onViewMatrix = camera.on("viewMatrix", updateDotPos);
+          const onProjMatrix = camera.on("projMatrix", updateDotPos);
+          const onCanvasBnd  = scene.canvas.on("boundary", updateDotPos);
+          const planesUpdate = scene.on("sectionPlaneUpdated", updateDotPos);
+
+          this._updatePosition = updateDotPos;
+
           this._cleanup = () => {
-              scene.camera.off(onViewMatrix);
-              scene.camera.off(onProjMatrix);
+              camera.off(onViewMatrix);
+              camera.off(onProjMatrix);
+              scene.canvas.off(onCanvasBnd);
+              scene.off(planesUpdate);
               this._dot.destroy();
           };
       }
@@ -10369,12 +11030,12 @@
           this._dot.setClickable(value);
       }
 
-      setCulled(value) {
-          this._dot.setCulled(value);
-      }
-
       setFillColor(value) {
           this._dot.setFillColor(value);
+      }
+
+      setBorderColor(value) {
+          this._dot.setBorderColor(value);
       }
 
       setHighlighted(value) {
@@ -10386,7 +11047,11 @@
       }
 
       setVisible(value) {
-          this._dot.setVisible(value);
+          if (this.__visible != value) {
+              this.__visible = value;
+              this._updatePosition();
+              this._dot.setVisible(value);
+          }
       }
 
       destroy() {
@@ -10396,469 +11061,191 @@
 
   }
 
-  /** @private */
-  class Wire {
+  class Label3D {
+      constructor(scene, parentElement, cfg) {
+          const camera = scene.camera;
 
-      constructor(parentElement, cfg = {}) {
+          this._label = new Label(parentElement, cfg);
+          this._start = math.vec3();
+          this._mid   = math.vec3();
+          this._end   = math.vec3();
+          this._yOff  = 0;
+          this._betweenWires = false;
+          this.__visible = true;
 
-          this._color = cfg.color || "black";
-          this._highlightClass = "viewer-ruler-wire-highlighted";
+          const setPosOnWire = (p0, p1, yOff) => {
+              p0[0] += p1[0];
+              p0[1] += p1[1];
+              math.mulVec2Scalar(p0, .5);
+              this._label.setPos(p0[0], p0[1] + yOff);
+          };
 
-          this._wire = document.createElement('div');
-          this._wire.className += this._wire.className ? ' viewer-ruler-wire' : 'viewer-ruler-wire';
-
-          this._wireClickable = document.createElement('div');
-          this._wireClickable.className += this._wireClickable.className ? ' viewer-ruler-wire-clickable' : 'viewer-ruler-wire-clickable';
-
-          this._thickness = cfg.thickness || 1.0;
-          this._thicknessClickable = cfg.thicknessClickable || 6.0;
-
-          this._visible = true;
-          this._culled = false;
-
-          var wire = this._wire;
-          var wireStyle = wire.style;
-
-          wireStyle.border = "solid " + this._thickness + "px " + this._color;
-          wireStyle.position = "absolute";
-          wireStyle["z-index"] = cfg.zIndex === undefined ? "2000001" : cfg.zIndex;
-          wireStyle.width = 0 + "px";
-          wireStyle.height = 0 + "px";
-          wireStyle.visibility = "visible";
-          wireStyle.top = 0 + "px";
-          wireStyle.left = 0 + "px";
-          wireStyle['-webkit-transform-origin'] = "0 0";
-          wireStyle['-moz-transform-origin'] = "0 0";
-          wireStyle['-ms-transform-origin'] = "0 0";
-          wireStyle['-o-transform-origin'] = "0 0";
-          wireStyle['transform-origin'] = "0 0";
-          wireStyle['-webkit-transform'] = 'rotate(0deg)';
-          wireStyle['-moz-transform'] = 'rotate(0deg)';
-          wireStyle['-ms-transform'] = 'rotate(0deg)';
-          wireStyle['-o-transform'] = 'rotate(0deg)';
-          wireStyle['transform'] = 'rotate(0deg)';
-          wireStyle["opacity"] = 1.0;
-          wireStyle["pointer-events"] = "none";
-          if (cfg.onContextMenu) ;
-
-          parentElement.appendChild(wire);
-
-          var wireClickable = this._wireClickable;
-          var wireClickableStyle = wireClickable.style;
-
-          wireClickableStyle.border = "solid " + this._thicknessClickable + "px " + this._color;
-          wireClickableStyle.position = "absolute";
-          wireClickableStyle["z-index"] = cfg.zIndex === undefined ? "2000002" : (cfg.zIndex + 1);
-          wireClickableStyle.width = 0 + "px";
-          wireClickableStyle.height = 0 + "px";
-          wireClickableStyle.visibility = "visible";
-          wireClickableStyle.top = 0 + "px";
-          wireClickableStyle.left = 0 + "px";
-          // wireClickableStyle["pointer-events"] = "none";
-          wireClickableStyle['-webkit-transform-origin'] = "0 0";
-          wireClickableStyle['-moz-transform-origin'] = "0 0";
-          wireClickableStyle['-ms-transform-origin'] = "0 0";
-          wireClickableStyle['-o-transform-origin'] = "0 0";
-          wireClickableStyle['transform-origin'] = "0 0";
-          wireClickableStyle['-webkit-transform'] = 'rotate(0deg)';
-          wireClickableStyle['-moz-transform'] = 'rotate(0deg)';
-          wireClickableStyle['-ms-transform'] = 'rotate(0deg)';
-          wireClickableStyle['-o-transform'] = 'rotate(0deg)';
-          wireClickableStyle['transform'] = 'rotate(0deg)';
-          wireClickableStyle["opacity"] = 0.0;
-          wireClickableStyle["pointer-events"] = "none";
-          if (cfg.onContextMenu) ;
-
-          parentElement.appendChild(wireClickable);
-
-          if (cfg.onMouseOver) {
-              wireClickable.addEventListener('mouseover', (event) => {
-                  cfg.onMouseOver(event, this);
-              });
-          }
-
-          if (cfg.onMouseLeave) {
-              wireClickable.addEventListener('mouseleave', (event) => {
-                  cfg.onMouseLeave(event, this);
-              });
-          }
-
-          if (cfg.onMouseWheel) {
-              wireClickable.addEventListener('wheel', (event) => {
-                  cfg.onMouseWheel(event, this);
-              });
-          }
-
-          if (cfg.onMouseDown) {
-              wireClickable.addEventListener('mousedown', (event) => {
-                  cfg.onMouseDown(event, this);
-              });
-          }
-
-          if (cfg.onMouseUp) {
-              wireClickable.addEventListener('mouseup', (event) => {
-                  cfg.onMouseUp(event, this);
-              });
-          }
-
-          if (cfg.onMouseMove) {
-              wireClickable.addEventListener('mousemove', (event) => {
-                  cfg.onMouseMove(event, this);
-              });
-          }
-
-          if (cfg.onContextMenu) {
-              if(os.isIphoneSafari()){
-                  wireClickable.addEventListener('touchstart', (event) => {
-                      event.preventDefault();
-                      if(this._timeout){
-                          clearTimeout(this._timeout);
-                          this._timeout = null;
-                      }
-                      this._timeout = setTimeout(() => {
-                          event.clientX = event.touches[0].clientX;
-                          event.clientY = event.touches[0].clientY;
-                          cfg.onContextMenu(event, this);
-                          clearTimeout(this._timeout);
-                          this._timeout = null;
-                      }, 500);
-                  });
-
-                  wireClickable.addEventListener('touchend', (event) => {
-                      event.preventDefault();
-                      //stops short touches from calling the timeout
-                      if(this._timeout) {
-                          clearTimeout(this._timeout);
-                          this._timeout = null;
-                      }
-                  } );
-
+          this._updatePositions = () => {
+              if (! this.__visible) {
+                  return;
               }
-              else {
-                  wireClickable.addEventListener('contextmenu', (event) => {
-                      console.log(event);
-                      cfg.onContextMenu(event, this);
-                      event.preventDefault();
-                      event.stopPropagation();
-                      console.log("Label context menu");
-                  });
+              if (this._betweenWires) {
+                  const visibleA = clipSegment(scene, parentElement, this._start, this._mid, tmpVec2a, tmpVec2b);
+                  const visibleB = clipSegment(scene, parentElement, this._end,   this._mid, tmpVec2c, tmpVec2d);
+                  this._label.setCulled(! (visibleA || visibleB));
+                  if (visibleA && visibleB) {
+                      tmpVec2b[0] += tmpVec2d[0];
+                      tmpVec2b[1] += tmpVec2d[1];
+                      math.mulVec2Scalar(tmpVec2b, .5);
+
+                      tmpVec2b[0] += tmpVec2a[0] + tmpVec2c[0];
+                      tmpVec2b[1] += tmpVec2a[1] + tmpVec2c[1];
+                      math.mulVec2Scalar(tmpVec2b, 1/3);
+                      this._label.setPos(tmpVec2b[0], tmpVec2b[1]);
+                  } else if (visibleA) {
+                      setPosOnWire(tmpVec2a, tmpVec2b, 0);
+                  } else if (visibleB) {
+                      setPosOnWire(tmpVec2c, tmpVec2d, 0);
+                  }
+              } else {
+                  const visible = (clipSegment(scene, parentElement, this._start, this._end, tmpVec2a, tmpVec2b)
+                                   &&
+                                   (math.distVec2(tmpVec2a, tmpVec2b) >= this._labelMinAxisLength));
+                  this._label.setCulled(!visible);
+                  if (visible) {
+                      setPosOnWire(tmpVec2a, tmpVec2b, this._yOff);
+                  }
               }
-              
+          };
+
+          const onViewMatrix = camera.on("viewMatrix", this._updatePositions);
+          const onProjMatrix = camera.on("projMatrix", this._updatePositions);
+          const onCanvasBnd  = scene.canvas.on("boundary", this._updatePositions);
+          const planesUpdate = scene.on("sectionPlaneUpdated", this._updatePositions);
+
+          this._cleanup = () => {
+              camera.off(onViewMatrix);
+              camera.off(onProjMatrix);
+              scene.canvas.off(onCanvasBnd);
+              scene.off(planesUpdate);
+              this._label.destroy();
+          };
+      }
+
+      setPosOnWire(p0, p1, yOff, labelMinAxisLength) {
+          this._start.set(p0);
+          this._end.set(p1);
+          this._yOff = yOff;
+          this._labelMinAxisLength = labelMinAxisLength;
+          this._betweenWires = false;
+          this._updatePositions();
+      }
+
+      setPosBetween(p0, p1, p2) {
+          this._start.set(p0);
+          this._mid.set(p1);
+          this._end.set(p2);
+          this._betweenWires = true;
+          this._updatePositions();
+      }
+
+      setFillColor(value) {
+          this._label.setFillColor(value);
+      }
+
+      setHighlighted(value) {
+          this._label.setHighlighted(value);
+      }
+
+      setText(value) {
+          this._label.setText(value);
+      }
+
+      setClickable(value) {
+          this._label.setClickable(value);
+      }
+
+      setVisible(value) {
+          if (this.__visible != value) {
+              this.__visible = value;
+              this._updatePositions();
+              this._label.setVisible(value);
           }
-
-          this._x1 = 0;
-          this._y1 = 0;
-          this._x2 = 0;
-          this._y2 = 0;
-
-          this._update();
-      }
-
-      get visible() {
-          return this._wire.style.visibility === "visible";
-      }
-
-      _update() {
-
-          var length = Math.abs(Math.sqrt((this._x1 - this._x2) * (this._x1 - this._x2) + (this._y1 - this._y2) * (this._y1 - this._y2)));
-          var angle = Math.atan2(this._y2 - this._y1, this._x2 - this._x1) * 180.0 / Math.PI;
-
-          var wireStyle = this._wire.style;
-          wireStyle["width"] = Math.round(length) + 'px';
-          wireStyle["left"] = Math.round(this._x1) + 'px';
-          wireStyle["top"] = Math.round(this._y1) + 'px';
-          wireStyle['-webkit-transform'] = 'rotate(' + angle + 'deg)';
-          wireStyle['-moz-transform'] = 'rotate(' + angle + 'deg)';
-          wireStyle['-ms-transform'] = 'rotate(' + angle + 'deg)';
-          wireStyle['-o-transform'] = 'rotate(' + angle + 'deg)';
-          wireStyle['transform'] = 'rotate(' + angle + 'deg)';
-
-          var wireClickableStyle = this._wireClickable.style;
-          wireClickableStyle["width"] = Math.round(length) + 'px';
-          wireClickableStyle["left"] = Math.round(this._x1) + 'px';
-          wireClickableStyle["top"] = Math.round(this._y1) + 'px';
-          wireClickableStyle['-webkit-transform'] = 'rotate(' + angle + 'deg)';
-          wireClickableStyle['-moz-transform'] = 'rotate(' + angle + 'deg)';
-          wireClickableStyle['-ms-transform'] = 'rotate(' + angle + 'deg)';
-          wireClickableStyle['-o-transform'] = 'rotate(' + angle + 'deg)';
-          wireClickableStyle['transform'] = 'rotate(' + angle + 'deg)';
-      }
-
-      setStartAndEnd(x1, y1, x2, y2) {
-          this._x1 = x1;
-          this._y1 = y1;
-          this._x2 = x2;
-          this._y2 = y2;
-          this._update();
-      }
-
-      setColor(color) {
-          this._color = color || "black";
-          this._wire.style.border = "solid " + this._thickness + "px " + this._color;
-      }
-
-      setOpacity(opacity) {
-          this._wire.style.opacity = opacity;
-      }
-
-      setVisible(visible) {
-          if (this._visible === visible) {
-              return;
-          }
-          this._visible = !!visible;
-          this._wire.style.visibility = this._visible && !this._culled ? "visible" : "hidden";
-      }
-
-      setCulled(culled) {
-          if (this._culled === culled) {
-              return;
-          }
-          this._culled = !!culled;
-          this._wire.style.visibility = this._visible && !this._culled ? "visible" : "hidden";
-      }
-
-      setClickable(clickable) {
-          this._wireClickable.style["pointer-events"] = (clickable) ? "all" : "none";
-      }
-
-      setHighlighted(highlighted) {
-          if (this._highlighted === highlighted) {
-              return;
-          }
-          this._highlighted = !!highlighted;
-          if (this._highlighted) {
-              this._wire.classList.add(this._highlightClass);
-          } else {
-              this._wire.classList.remove(this._highlightClass);
-          }
-      }
-
-      destroy(visible) {
-          if (this._wire.parentElement) {
-              this._wire.parentElement.removeChild(this._wire);
-          }
-          if (this._wireClickable.parentElement) {
-              this._wireClickable.parentElement.removeChild(this._wireClickable);
-          }
-      }
-  }
-
-  /** @private */
-  class Label {
-
-      constructor(parentElement, cfg = {}) {
-
-          this._highlightClass = "viewer-ruler-label-highlighted";
-
-          this._prefix = cfg.prefix || "";
-          this._x = 0;
-          this._y = 0;
-          this._visible = true;
-          this._culled = false;
-
-          this._label = document.createElement('div');
-          this._label.className += this._label.className ? ' viewer-ruler-label' : 'viewer-ruler-label';
-          this._timeout = null;
-
-          var label = this._label;
-          var style = label.style;
-
-          style["border-radius"] = 5 + "px";
-          style.color = "white";
-          style.padding = "4px";
-          style.border = "solid 1px";
-          style.background = "lightgreen";
-          style.position = "absolute";
-          style["z-index"] = cfg.zIndex === undefined ? "5000005" : cfg.zIndex;
-          style.width = "auto";
-          style.height = "auto";
-          style.visibility = "visible";
-          style.top = 0 + "px";
-          style.left = 0 + "px";
-          style["pointer-events"] = "all";
-          style["opacity"] = 1.0;
-          if (cfg.onContextMenu) ;
-          label.innerText = "";
-
-          parentElement.appendChild(label);
-
-          this.setPos(cfg.x || 0, cfg.y || 0);
-          this.setFillColor(cfg.fillColor);
-          this.setBorderColor(cfg.fillColor);
-          this.setText(cfg.text);
-
-          if (cfg.onMouseOver) {
-              label.addEventListener('mouseover', (event) => {
-                  cfg.onMouseOver(event, this);
-                  event.preventDefault();
-              });
-          }
-
-          if (cfg.onMouseLeave) {
-              label.addEventListener('mouseleave', (event) => {
-                  cfg.onMouseLeave(event, this);
-                  event.preventDefault();
-              });
-          }
-
-          if (cfg.onMouseWheel) {
-              label.addEventListener('wheel', (event) => {
-                  cfg.onMouseWheel(event, this);
-              });
-          }
-
-          if (cfg.onMouseDown) {
-              label.addEventListener('mousedown', (event) => {
-                  cfg.onMouseDown(event, this);
-                  event.stopPropagation();
-              });
-          }
-
-          if (cfg.onMouseUp) {
-              label.addEventListener('mouseup', (event) => {
-                  cfg.onMouseUp(event, this);
-                  event.stopPropagation();
-              });
-          }
-
-          if (cfg.onMouseMove) {
-              label.addEventListener('mousemove', (event) => {
-                  cfg.onMouseMove(event, this);
-              });
-          }
-
-          if (cfg.onContextMenu) {
-              if(os.isIphoneSafari()){
-                  label.addEventListener('touchstart', (event) => {
-                      event.preventDefault();
-                      if(this._timeout){
-                          clearTimeout(this._timeout);
-                          this._timeout = null;
-                      }
-                      this._timeout = setTimeout(() => {
-                          event.clientX = event.touches[0].clientX;
-                          event.clientY = event.touches[0].clientY;
-                          cfg.onContextMenu(event, this);
-                          clearTimeout(this._timeout);
-                          this._timeout = null;
-                      }, 500);
-                  });
-
-                  label.addEventListener('touchend', (event) => {
-                      event.preventDefault();
-                      //stops short touches from calling the timeout
-                      if(this._timeout) {
-                          clearTimeout(this._timeout);
-                          this._timeout = null;
-                      }
-                  } );
-
-              }
-              else {
-                  label.addEventListener('contextmenu', (event) => {
-                      console.log(event);
-                      cfg.onContextMenu(event, this);
-                      event.preventDefault();
-                      event.stopPropagation();
-                      console.log("Label context menu");
-                  });
-              }
-              
-          }
-      }
-
-      setPos(x, y) {
-          this._x = x;
-          this._y = y;
-          var style = this._label.style;
-          style["left"] = (Math.round(x) - 20) + 'px';
-          style["top"] = (Math.round(y) - 12) + 'px';
-      }
-
-      setPosOnWire(x1, y1, x2, y2) {
-          var x = x1 + ((x2 - x1) * 0.5);
-          var y = y1 + ((y2 - y1) * 0.5);
-          var style = this._label.style;
-          style["left"] = (Math.round(x) - 20) + 'px';
-          style["top"] = (Math.round(y) - 12) + 'px';
-      }
-
-      setPosBetweenWires(x1, y1, x2, y2, x3, y3) {
-          var x = (x1 + x2 + x3) / 3;
-          var y = (y1 + y2 + y3) / 3;
-          var style = this._label.style;
-          style["left"] = (Math.round(x) - 20) + 'px';
-          style["top"] = (Math.round(y) - 12) + 'px';
-      }
-
-      setText(text) {
-          this._label.innerHTML = this._prefix + (text || "");
-      }
-
-      setFillColor(color) {
-          this._fillColor = color || "lightgreen";
-          this._label.style.background =this._fillColor;
-      }
-
-      setBorderColor(color) {
-          this._borderColor = color || "black";
-          this._label.style.border = "solid 1px " + this._borderColor;
-      }
-
-      setOpacity(opacity) {
-          this._label.style.opacity = opacity;
-      }
-
-      setVisible(visible) {
-          if (this._visible === visible) {
-              return;
-          }
-          this._visible = !!visible;
-          this._label.style.visibility = this._visible && !this._culled ? "visible" : "hidden";
-      }
-
-      setCulled(culled) {
-          if (this._culled === culled) {
-              return;
-          }
-          this._culled = !!culled;
-          this._label.style.visibility = this._visible && !this._culled ? "visible" : "hidden";
-      }
-
-      setHighlighted(highlighted) {
-          if (this._highlighted === highlighted) {
-              return;
-          }
-          this._highlighted = !!highlighted;
-          if (this._highlighted) {
-              this._label.classList.add(this._highlightClass);
-          } else {
-              this._label.classList.remove(this._highlightClass);
-          }
-      }
-
-      setClickable(clickable) {
-          this._label.style["pointer-events"] = (clickable) ? "all" : "none";
-      }
-
-      setPrefix(prefix) {
-          if(this._prefix === prefix){
-              return;
-          }
-          this._prefix = prefix;
       }
 
       destroy() {
-          if (this._label.parentElement) {
-              this._label.parentElement.removeChild(this._label);
+          this._cleanup();
+      }
+
+  }
+
+  class Wire3D {
+      constructor(scene, parentElement, cfg) {
+          const camera = scene.camera;
+
+          this._wire  = new Wire(parentElement, cfg);
+          this._start = math.vec3();
+          this._end   = math.vec3();
+          this.__visible = true;
+
+          this._updatePositions = () => {
+              if (! this.__visible) {
+                  return;
+              }
+              const visible = clipSegment(scene, parentElement, this._start, this._end, tmpVec2a, tmpVec2b);
+              this._wire.setCulled(! visible);
+              if (visible) {
+                  this._wire.setStartAndEnd(tmpVec2a[0], tmpVec2a[1], tmpVec2b[0], tmpVec2b[1]);
+              }
+          };
+
+          const onViewMatrix = camera.on("viewMatrix", this._updatePositions);
+          const onProjMatrix = camera.on("projMatrix", this._updatePositions);
+          const onCanvasBnd  = scene.canvas.on("boundary", this._updatePositions);
+          const planesUpdate = scene.on("sectionPlaneUpdated", this._updatePositions);
+
+          this._cleanup = () => {
+              camera.off(onViewMatrix);
+              camera.off(onProjMatrix);
+              scene.canvas.off(onCanvasBnd);
+              scene.off(planesUpdate);
+              this._wire.destroy();
+          };
+      }
+
+      setEnds(start, end) {
+          this._start.set(start);
+          this._end.set(end);
+          this._updatePositions();
+      }
+
+      setClickable(value) {
+          this._wire.setClickable(value);
+      }
+
+      setColor(value) {
+          this._wire.setColor(value);
+      }
+
+      setHighlighted(value) {
+          this._wire.setHighlighted(value);
+      }
+
+      setOpacity(value) {
+          this._wire.setOpacity(value);
+      }
+
+      setVisible(value) {
+          if (this.__visible != value) {
+              this.__visible = value;
+              this._updatePositions();
+              this._wire.setVisible(value);
           }
       }
 
-      
+      destroy() {
+          this._cleanup();
+      }
+
   }
 
-  var originVec = math.vec3();
-  var targetVec = math.vec3();
+  const tmpVec3a$1 = math.vec3();
+  const tmpVec3b$1 = math.vec3();
 
   /**
    * @desc Measures the angle indicated by three 3D points.
@@ -10872,7 +11259,9 @@
        */
       constructor(plugin, cfg = {}) {
 
-          super(plugin.viewer.scene, cfg);
+          const scene = plugin.viewer.scene;
+
+          super(scene, cfg);
 
           /**
            * The {@link AngleMeasurementsPlugin} that owns this AngleMeasurement.
@@ -10880,349 +11269,165 @@
            */
           this.plugin = plugin;
 
-          this._container = cfg.container;
-          if (!this._container) {
+          const container = cfg.container;
+          if (!container) {
               throw "config missing: container";
           }
 
           this._color = cfg.color || plugin.defaultColor;
 
-          var scene = this.plugin.viewer.scene;
+          const channel = function(v) {
+              const listeners = [ ];
+              let value = v !== false;
+              return {
+                  reg: (l) => listeners.push(l),
+                  get: () => value,
+                  set: (v) => {
+                      value = v !== false;
+                      listeners.forEach(l => l(value));
+                  }
+              };
+          };
 
-          this._originWorld = math.vec3();
-          this._cornerWorld = math.vec3();
-          this._targetWorld = math.vec3();
+          this._visible           = channel(cfg.visible);
+          this._originVisible     = channel(cfg.originVisible);
+          this._cornerVisible     = channel(cfg.cornerVisible);
+          this._targetVisible     = channel(cfg.targetVisible);
+          this._originWireVisible = channel(cfg.originWireVisible);
+          this._targetWireVisible = channel(cfg.targetWireVisible);
+          this._angleVisible      = channel(cfg.angleVisible);
+          this._labelsVisible     = channel();
+          this.labelsVisible      = cfg.labelsVisible;
+          this._clickable         = channel(false);
 
-          this._wp = new Float64Array(12);
-          this._vp = new Float64Array(12);
-          this._pp = new Float64Array(12);
-          this._cp = new Int16Array(6);
+          this.approximate = cfg.approximate;
+
+
+          const canvas = scene.canvas.canvas;
 
           const onMouseOver = cfg.onMouseOver ? (event) => {
               cfg.onMouseOver(event, this);
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new MouseEvent('mouseover', event));
+              canvas.dispatchEvent(new MouseEvent('mouseover', event));
           } : null;
 
           const onMouseLeave = cfg.onMouseLeave ? (event) => {
               cfg.onMouseLeave(event, this);
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new MouseEvent('mouseleave', event));
+              canvas.dispatchEvent(new MouseEvent('mouseleave', event));
           } : null;
 
           const onContextMenu = cfg.onContextMenu ? (event) => {
               cfg.onContextMenu(event, this);
           } : null;
 
-          const onMouseWheel = (event) => {
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new WheelEvent('wheel', event));
+          const onMouseDown  = (event) => canvas.dispatchEvent(new MouseEvent('mousedown', event));
+          const onMouseUp    = (event) => canvas.dispatchEvent(new MouseEvent('mouseup', event));
+          const onMouseMove  = (event) => canvas.dispatchEvent(new MouseEvent('mousemove', event));
+          const onMouseWheel = (event) => canvas.dispatchEvent(new WheelEvent('wheel', event));
+
+
+          this._cleanups = [ ];
+          this._drawables = [ ];
+
+          const registerDrawable = (drawable, visibilityChannels) => {
+              const updateVisibility = () => drawable.setVisible(visibilityChannels.every(ch => ch.get()));
+              visibilityChannels.forEach(ch => ch.reg(updateVisibility));
+              this._drawables.push(drawable);
+              this._cleanups.push(() => drawable.destroy());
           };
 
-          const onMouseDown = (event) => {
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new MouseEvent('mousedown', event));
-          } ;
-
-          const onMouseUp =  (event) => {
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new MouseEvent('mouseup', event));
+          const makeWire = (color, thickness, visibilityChannels) => {
+              const wire = new Wire3D(scene, container, {
+                  color: color,
+                  thickness: thickness,
+                  thicknessClickable: 6,
+                  zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 1 : undefined,
+                  onMouseOver,
+                  onMouseLeave,
+                  onMouseWheel,
+                  onMouseDown,
+                  onMouseUp,
+                  onMouseMove,
+                  onContextMenu
+              });
+              registerDrawable(wire, visibilityChannels);
+              return {
+                  setEnds: (p0, p1) => wire.setEnds(p0, p1),
+                  setColor: value => wire.setColor(value)
+              };
           };
+          this._originWire = makeWire(this._color || "blue", 1, [ this._visible, this._originWireVisible ]);
+          this._targetWire = makeWire(this._color || "red",  1, [ this._visible, this._targetWireVisible ]);
 
-          const onMouseMove =  (event) => {
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new MouseEvent('mousemove', event));
+          const makeLabel = (color, zIndexOffset, visibilityChannels) => {
+              const label = new Label3D(scene, container, {
+                  fillColor: color,
+                  zIndex: plugin.zIndex + zIndexOffset,
+                  onMouseOver,
+                  onMouseLeave,
+                  onMouseWheel,
+                  onMouseDown,
+                  onMouseUp,
+                  onMouseMove,
+                  onContextMenu
+              });
+              registerDrawable(label, visibilityChannels);
+              return {
+                  setFillColor:  value => label.setFillColor(value),
+                  setPosOnWire:  (p0, p1, offset) => label.setPosOnWire(p0, p1, offset),
+                  setPosBetween: (p0, p1, p2) => label.setPosBetween(p0, p1, p2),
+                  setText:       str => label.setText(str)
+              };
           };
+          this._angleLabel = makeLabel(this._color || "#00BBFF", 2, [ this._visible, this._angleVisible, this._labelsVisible ]);
 
-          this._originDot = new Dot3D(scene, cfg.origin, this._container, {
-              fillColor: this._color,
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 2 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
-          this._cornerDot = new Dot3D(scene, cfg.corner, this._container, {
-              fillColor: this._color,
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 2 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
-          this._targetDot = new Dot3D(scene, cfg.target, this._container, {
-              fillColor: this._color,
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 2 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
+          const makeDot = (cfg, visibilityChannels) => {
+              const dot = new Dot3D(scene, cfg, container, {
+                  fillColor: this._color,
+                  zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 2 : undefined,
+                  onMouseOver,
+                  onMouseLeave,
+                  onMouseWheel,
+                  onMouseDown,
+                  onMouseUp,
+                  onMouseMove,
+                  onContextMenu
+              });
+              dot.on("worldPos", () => this._update());
+              registerDrawable(dot, visibilityChannels);
+              return dot;
+          };
+          this._originDot = makeDot(cfg.origin, [ this._visible, this._originVisible ]);
+          this._cornerDot = makeDot(cfg.corner, [ this._visible, this._cornerVisible ]);
+          this._targetDot = makeDot(cfg.target, [ this._visible, this._targetVisible ]);
 
-          this._originWire = new Wire(this._container, {
-              color: this._color || "blue",
-              thickness: 1,
-              zIndex: plugin.zIndex,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
-          this._targetWire = new Wire(this._container, {
-              color: this._color || "red",
-              thickness: 1,
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 1 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
-
-          this._angleLabel = new Label(this._container, {
-              fillColor: this._color || "#00BBFF",
-              prefix: "",
-              text: "",
-              zIndex: plugin.zIndex + 2,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
-
-          this._wpDirty = false;
-          this._vpDirty = false;
-          this._cpDirty = false;
-
-          this._visible = false;
-          this._originVisible = false;
-          this._cornerVisible = false;
-          this._targetVisible = false;
-
-          this._originWireVisible = false;
-          this._targetWireVisible = false;
-
-          this._angleVisible = false;
-          this._labelsVisible = false;
-          this._clickable = false;
-
-          this._originDot.on("worldPos", (value) => {
-              this._originWorld.set(value || [0, 0, 0]);
-              this._wpDirty = true;
-              this._needUpdate(0); // No lag
-          });
-
-          this._cornerDot.on("worldPos", (value) => {
-              this._cornerWorld.set(value || [0, 0, 0]);
-              this._wpDirty = true;
-              this._needUpdate(0); // No lag
-          });
-
-          this._targetDot.on("worldPos", (value) => {
-              this._targetWorld.set(value || [0, 0, 0]);
-              this._wpDirty = true;
-              this._needUpdate(0); // No lag
-          });
-
-          this._onViewMatrix = scene.camera.on("viewMatrix", () => {
-              this._vpDirty = true;
-              this._needUpdate(0); // No lag
-          });
-
-          this._onProjMatrix = scene.camera.on("projMatrix", () => {
-              this._cpDirty = true;
-              this._needUpdate();
-          });
-
-          this._onCanvasBoundary = scene.canvas.on("boundary", () => {
-              this._cpDirty = true;
-              this._needUpdate(0); // No lag
-          });
-
-          this._onSectionPlaneUpdated = scene.on("sectionPlaneUpdated", () => {
-              this._sectionPlanesDirty = true;
-              this._needUpdate();
-          });
-
-          this.approximate = cfg.approximate;
-          this.visible = cfg.visible;
-
-          this.originVisible = cfg.originVisible;
-          this.cornerVisible = cfg.cornerVisible;
-          this.targetVisible = cfg.targetVisible;
-
-          this.originWireVisible = cfg.originWireVisible;
-          this.targetWireVisible = cfg.targetWireVisible;
-
-          this.angleVisible = cfg.angleVisible;
-          this.labelsVisible = cfg.labelsVisible;
+          this._update();
       }
 
       _update() {
-
-          if (!this._visible) {
+          if (! this._targetDot) {
               return;
           }
 
-          const scene = this.plugin.viewer.scene;
+          const p0 = this._originDot.worldPos;
+          const p1 = this._cornerDot.worldPos;
+          const p2 = this._targetDot.worldPos;
 
-          if (this._wpDirty) {
+          this._originWire.setEnds(p0, p1);
+          this._targetWire.setEnds(p1, p2);
+          this._angleLabel.setPosBetween(p0, p1, p2);
 
-              this._wp[0] = this._originWorld[0];
-              this._wp[1] = this._originWorld[1];
-              this._wp[2] = this._originWorld[2];
-              this._wp[3] = 1.0;
+          math.subVec3(p0, p1, tmpVec3a$1);
+          math.subVec3(p2, p1, tmpVec3b$1);
 
-              this._wp[4] = this._cornerWorld[0];
-              this._wp[5] = this._cornerWorld[1];
-              this._wp[6] = this._cornerWorld[2];
-              this._wp[7] = 1.0;
-
-              this._wp[8] = this._targetWorld[0];
-              this._wp[9] = this._targetWorld[1];
-              this._wp[10] = this._targetWorld[2];
-              this._wp[11] = 1.0;
-
-              this._wpDirty = false;
-              this._vpDirty = true;
+          if ((math.lenVec3(tmpVec3a$1) > 0) && (math.lenVec3(tmpVec3b$1) > 0)) {
+              math.normalizeVec3(tmpVec3a$1);
+              math.normalizeVec3(tmpVec3b$1);
+              this._angle = Math.abs(math.angleVec3(tmpVec3a$1, tmpVec3b$1)) * math.RADTODEG;
+              this._angleLabel.setText((this._approximate ? " ~ " : " = ") + this._angle.toFixed(2) + "°");
+          } else {
+              this._angle = undefined;
+              this._angleLabel.setText("");
           }
-
-          if (this._vpDirty) {
-
-              math.transformPositions4(scene.camera.viewMatrix, this._wp, this._vp);
-
-              this._vp[3] = 1.0;
-              this._vp[7] = 1.0;
-              this._vp[11] = 1.0;
-
-              this._vpDirty = false;
-              this._cpDirty = true;
-          }
-
-          if (this._sectionPlanesDirty) {
-
-              if (this._isSliced(this._wp)) {
-                  this._angleLabel.setCulled(true);
-                  this._originWire.setCulled(true);
-                  this._targetWire.setCulled(true);
-                  this._originDot.setCulled(true);
-                  this._cornerDot.setCulled(true);
-                  this._targetDot.setCulled(true);
-                  return;
-              } else {
-                  this._angleLabel.setCulled(false);
-                  this._originWire.setCulled(false);
-                  this._targetWire.setCulled(false);
-                  this._originDot.setCulled(false);
-                  this._cornerDot.setCulled(false);
-                  this._targetDot.setCulled(false);
-              }
-
-              this._sectionPlanesDirty = true;
-          }
-
-          if (this._cpDirty) {
-
-              const near = -0.3;
-              const zOrigin = this._originDot.viewPos[2];
-              const zCorner = this._cornerDot.viewPos[2];
-              const zTarget = this._targetDot.viewPos[2];
-
-              if (zOrigin > near || zCorner > near || zTarget > near) {
-
-                  this._originDot.setVisible(false);
-                  this._cornerDot.setVisible(false);
-                  this._targetDot.setVisible(false);
-
-                  this._originWire.setVisible(false);
-                  this._targetWire.setVisible(false);
-
-                  this._angleLabel.setCulled(true);
-
-                  return;
-              }
-
-              math.transformPositions4(scene.camera.project.matrix, this._vp, this._pp);
-
-              var pp = this._pp;
-              var cp = this._cp;
-
-              var canvas = scene.canvas.canvas;
-              var offsets = canvas.getBoundingClientRect();
-              const containerOffsets = this._container.getBoundingClientRect();
-              var top = offsets.top - containerOffsets.top;
-              var left = offsets.left - containerOffsets.left;
-              var aabb = scene.canvas.boundary;
-              var canvasWidth = aabb[2];
-              var canvasHeight = aabb[3];
-              var j = 0;
-
-              for (var i = 0, len = pp.length; i < len; i += 4) {
-                  cp[j] = left + Math.floor((1 + pp[i + 0] / pp[i + 3]) * canvasWidth / 2);
-                  cp[j + 1] = top + Math.floor((1 - pp[i + 1] / pp[i + 3]) * canvasHeight / 2);
-                  j += 2;
-              }
-
-              this._originWire.setStartAndEnd(cp[0], cp[1], cp[2], cp[3]);
-              this._targetWire.setStartAndEnd(cp[2], cp[3], cp[4], cp[5]);
-
-              this._angleLabel.setPosBetweenWires(cp[0], cp[1], cp[2], cp[3], cp[4], cp[5]);
-
-              math.subVec3(this._originWorld, this._cornerWorld, originVec);
-              math.subVec3(this._targetWorld, this._cornerWorld, targetVec);
-
-              var validVecs =
-                  (originVec[0] !== 0 || originVec[1] !== 0 || originVec[2] !== 0) &&
-                  (targetVec[0] !== 0 || targetVec[1] !== 0 || targetVec[2] !== 0);
-
-              if (validVecs) {
-
-                  const tilde = this._approximate ? " ~ " : " = ";
-
-                  math.normalizeVec3(originVec);
-                  math.normalizeVec3(targetVec);
-                  const angle = Math.abs(math.angleVec3(originVec, targetVec));
-                  this._angle = angle / math.DEGTORAD;
-                  this._angleLabel.setText(tilde + this._angle.toFixed(2) + "°");
-              } else {
-                  this._angleLabel.setText("");
-              }
-
-              // this._angleLabel.setText((Math.abs(math.lenVec3(math.subVec3(this._targetWorld, this._originWorld, distVec3)) * scale).toFixed(2)) + unitAbbrev);
-
-              this._originDot.setVisible(this._visible && this._originVisible);
-              this._cornerDot.setVisible(this._visible && this._cornerVisible);
-              this._targetDot.setVisible(this._visible && this._targetVisible);
-
-              this._originWire.setVisible(this._visible && this._originWireVisible);
-              this._targetWire.setVisible(this._visible && this._targetWireVisible);
-
-              this._angleLabel.setCulled(!(this._visible && this._angleVisible && this.labelsVisible));
-
-              this._cpDirty = false;
-          }
-      }
-
-      _isSliced(positions) {
-          const sectionPlanes = this.scene._sectionPlanesState.sectionPlanes;
-          for (let i = 0, len = sectionPlanes.length; i < len; i++) {
-              const sectionPlane = sectionPlanes[i];
-              if (math.planeClipsPositions3(sectionPlane.pos, sectionPlane.dir, positions, 4)) {
-                  return true
-              }
-          }
-          return false;
       }
 
       /**
@@ -11238,8 +11443,7 @@
               return;
           }
           this._approximate = approximate;
-          this._cpDirty = true;
-          this._needUpdate(0);
+          this._update();
       }
 
       /**
@@ -11287,7 +11491,6 @@
        * @type {Number}
        */
       get angle() {
-          this._update();
           return this._angle;
       }
 
@@ -11309,14 +11512,13 @@
        * @type {String}
        */
       set color(value) {
+          this._color = value;
           this._originDot.setFillColor(value);
           this._cornerDot.setFillColor(value);
           this._targetDot.setFillColor(value);
           this._originWire.setColor(value || "blue");
           this._targetWire.setColor(value || "red");
           this._angleLabel.setFillColor(value || "#00BBFF");
-
-          this._color = value;
       }
 
       /**
@@ -11325,16 +11527,7 @@
        * @type {Boolean}
        */
       set visible(value) {
-          value = value !== false;
-          this._visible = value;
-          this._originDot.setVisible(this._visible && this._originVisible);
-          this._cornerDot.setVisible(this._visible && this._cornerVisible);
-          this._targetDot.setVisible(this._visible && this._targetVisible);
-          this._originWire.setVisible(this._visible && this._originWireVisible);
-          this._targetWire.setVisible(this._visible && this._targetWireVisible);
-          this._angleLabel.setVisible(this._visible && this._angleVisible);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._visible.set(value);
       }
 
       /**
@@ -11343,7 +11536,7 @@
        * @type {Boolean}
        */
       get visible() {
-          return this._visible;
+          return this._visible.get();
       }
 
       /**
@@ -11352,11 +11545,7 @@
        * @type {Boolean}
        */
       set originVisible(value) {
-          value = value !== false;
-          this._originVisible = value;
-          this._originDot.setVisible(this._visible && this._originVisible);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._originVisible.set(value);
       }
 
       /**
@@ -11365,7 +11554,7 @@
        * @type {Boolean}
        */
       get originVisible() {
-          return this._originVisible;
+          return this._originVisible.get();
       }
 
       /**
@@ -11374,11 +11563,7 @@
        * @type {Boolean}
        */
       set cornerVisible(value) {
-          value = value !== false;
-          this._cornerVisible = value;
-          this._cornerDot.setVisible(this._visible && this._cornerVisible);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._cornerVisible.set(value);
       }
 
       /**
@@ -11387,7 +11572,7 @@
        * @type {Boolean}
        */
       get cornerVisible() {
-          return this._cornerVisible;
+          return this._cornerVisible.get();
       }
 
       /**
@@ -11396,11 +11581,7 @@
        * @type {Boolean}
        */
       set targetVisible(value) {
-          value = value !== false;
-          this._targetVisible = value;
-          this._targetDot.setVisible(this._visible && this._targetVisible);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._targetVisible.set(value);
       }
 
       /**
@@ -11409,7 +11590,7 @@
        * @type {Boolean}
        */
       get targetVisible() {
-          return this._targetVisible;
+          return this._targetVisible.get();
       }
 
       /**
@@ -11418,11 +11599,7 @@
        * @type {Boolean}
        */
       set originWireVisible(value) {
-          value = value !== false;
-          this._originWireVisible = value;
-          this._originWire.setVisible(this._visible && this._originWireVisible);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._originWireVisible.set(value);
       }
 
       /**
@@ -11431,7 +11608,7 @@
        * @type {Boolean}
        */
       get originWireVisible() {
-          return this._originWireVisible;
+          return this._originWireVisible.get();
       }
 
       /**
@@ -11440,11 +11617,7 @@
        * @type {Boolean}
        */
       set targetWireVisible(value) {
-          value = value !== false;
-          this._targetWireVisible = value;
-          this._targetWire.setVisible(this._visible && this._targetWireVisible);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._targetWireVisible.set(value);
       }
 
       /**
@@ -11453,7 +11626,7 @@
        * @type {Boolean}
        */
       get targetWireVisible() {
-          return this._targetWireVisible;
+          return this._targetWireVisible.get();
       }
 
       /**
@@ -11462,11 +11635,7 @@
        * @type {Boolean}
        */
       set angleVisible(value) {
-          value = value !== false;
-          this._angleVisible = value;
-          this._angleLabel.setVisible(this._visible && this._angleVisible);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._angleVisible.set(value);
       }
 
       /**
@@ -11475,7 +11644,7 @@
        * @type {Boolean}
        */
       get angleVisible() {
-          return this._angleVisible;
+          return this._angleVisible.get();
       }
 
       /**
@@ -11484,12 +11653,7 @@
        * @type {Boolean}
        */
       set labelsVisible(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultLabelsVisible;
-          this._labelsVisible = value;
-          var labelsVisible = this._visible && this._labelsVisible;
-          this._angleLabel.setVisible(labelsVisible);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._labelsVisible.set(value !== undefined ? Boolean(value) : this.plugin.defaultLabelsVisible);
       }
 
       /**
@@ -11498,7 +11662,7 @@
        * @type {Boolean}
        */
       get labelsVisible() {
-          return this._labelsVisible;
+          return this._labelsVisible.get();
       }
 
       /**
@@ -11506,12 +11670,7 @@
        * @param highlighted
        */
       setHighlighted(highlighted) {
-          this._originDot.setHighlighted(highlighted);
-          this._cornerDot.setHighlighted(highlighted);
-          this._targetDot.setHighlighted(highlighted);
-          this._originWire.setHighlighted(highlighted);
-          this._targetWire.setHighlighted(highlighted);
-          this._angleLabel.setHighlighted(highlighted);
+          this._drawables.forEach(d => d.setHighlighted(highlighted));
       }
 
       /**
@@ -11520,14 +11679,8 @@
        * @type {Boolean}
        */
       set clickable(value) {
-          value = !!value;
-          this._clickable = value;
-          this._originDot.setClickable(this._clickable);
-          this._cornerDot.setClickable(this._clickable);
-          this._targetDot.setClickable(this._clickable);
-          this._originWire.setClickable(this._clickable);
-          this._targetWire.setClickable(this._clickable);
-          this._angleLabel.setClickable(this._clickable);
+          this._clickable.set(!!value);
+          this._drawables.forEach(d => d.setClickable(this._clickable.get()));
       }
 
       /**
@@ -11536,38 +11689,14 @@
        * @type {Boolean}
        */
       get clickable() {
-          return this._clickable;
+          return this._clickable.get();
       }
 
       /**
        * @private
        */
       destroy() {
-
-          const scene = this.plugin.viewer.scene;
-
-          if (this._onViewMatrix) {
-              scene.camera.off(this._onViewMatrix);
-          }
-          if (this._onProjMatrix) {
-              scene.camera.off(this._onProjMatrix);
-          }
-          if (this._onCanvasBoundary) {
-              scene.canvas.off(this._onCanvasBoundary);
-          }
-          if (this._onSectionPlaneUpdated) {
-              scene.off(this._onSectionPlaneUpdated);
-          }
-
-          this._originDot.destroy();
-          this._cornerDot.destroy();
-          this._targetDot.destroy();
-
-          this._originWire.destroy();
-          this._targetWire.destroy();
-
-          this._angleLabel.destroy();
-
+          this._cleanups.forEach(cleanup => cleanup());
           super.destroy();
       }
   }
@@ -11998,7 +12127,7 @@
                   mouseHovering = false;
                   if (pointerLens) {
                       pointerLens.visible = true;
-                      pointerLens.pointerPos = event.canvasPos;
+                      pointerLens.canvasPos = event.canvasPos;
                       pointerLens.snappedCanvasPos = event.snappedCanvasPos || event.canvasPos;
                       pointerLens.snapped = false;
                   }
@@ -16212,6 +16341,8 @@
       return extension;
   }
 
+  const vec3_0 = math.vec3([0,0,0]);
+
   /**
    * @private
    */
@@ -16890,9 +17021,11 @@
               // Transparent color fill
 
               if (normalFillTransparentBinLen > 0) {
+                  const eye = frameCtx.pickOrigin || scene.camera.eye;
+                  const byDist = normalFillTransparentBin.map(d => ({ drawable: d, distSq: math.distVec3(d.origin || vec3_0, eye) }));
+                  byDist.sort((a, b) => b.distSq - a.distSq);
                   for (i = 0; i < normalFillTransparentBinLen; i++) {
-                      drawable = normalFillTransparentBin[i];
-                      drawable.drawColorTransparent(frameCtx);
+                      byDist[i].drawable.drawColorTransparent(frameCtx);
                   }
               }
 
@@ -18877,6 +19010,30 @@
            * @type {Number}
            */
           this.KEY_SPACE = 32;
+
+          /**
+           * Code for the left mouse button.
+           * @property MOUSE_LEFT_BUTTON
+           * @final
+           * @type {Number}
+           */
+          this.MOUSE_LEFT_BUTTON = 260;
+
+          /**
+           * Code for the middle mouse button.
+           * @property MOUSE_MIDDLE_BUTTON
+           * @final
+           * @type {Number}
+           */
+          this.MOUSE_MIDDLE_BUTTON = 261;
+
+          /**
+           * Code for the right mouse button.
+           * @property MOUSE_RIGHT_BUTTON
+           * @final
+           * @type {Number}
+           */
+          this.MOUSE_RIGHT_BUTTON = 262;
 
           /**
            * The canvas element that mouse and keyboards are bound to.
@@ -53485,7 +53642,7 @@
               state.indicesBuf = new ArrayBuf(gl, gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(geometry.indices), geometry.indices.length, 1, gl.STATIC_DRAW);
               state.numIndices = geometry.indices.length;
           }
-          if (geometry.primitive === "triangles" || geometry.primitive === "solid" || geometry.primitive === "surface") {
+          if (geometry.edgeIndices && geometry.edgeIndices.length > 0) {
               state.edgeIndicesBuf = new ArrayBuf(gl, gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(geometry.edgeIndices), geometry.edgeIndices.length, 1, gl.STATIC_DRAW);
           }
 
@@ -64631,6 +64788,10 @@
               const sectionPlanes = scene._sectionPlanesState.sectionPlanes;
               const baseIndex = dataTextureLayer.layerIndex * numSectionPlanes;
               const renderFlags = model.renderFlags;
+              if (scene.crossSections) {
+                  gl.uniform4fv(this._uSliceColor, scene.crossSections.sliceColor);
+                  gl.uniform1f(this._uSliceThickness, scene.crossSections.sliceThickness);
+              }
               for (let sectionPlaneIndex = 0; sectionPlaneIndex < numAllocatedSectionPlanes; sectionPlaneIndex++) {
                   const sectionPlaneUniforms = this._uSectionPlanes[sectionPlaneIndex];
                   if (sectionPlaneUniforms) {
@@ -64768,6 +64929,11 @@
           this._uTexturePerPolygonIdPortionIds = "uTexturePerPolygonIdPortionIds";
           this._uTexturePerObjectMatrix= "uTexturePerObjectMatrix";
           this._uCameraEyeRtc = program.getLocation("uCameraEyeRtc");
+
+          if (scene.crossSections) {
+              this._uSliceColor = program.getLocation("sliceColor");
+              this._uSliceThickness = program.getLocation("sliceThickness");
+          }
       }
 
       _bindProgram(frameCtx) {
@@ -65084,11 +65250,14 @@
                   src.push("uniform vec3 sectionPlanePos" + i + ";");
                   src.push("uniform vec3 sectionPlaneDir" + i + ";");
               }
+              src.push("uniform float sliceThickness;");
+              src.push("uniform vec4 sliceColor;");
           }
           src.push("in vec4 vColor;");
           src.push("out vec4 outColor;");
           src.push("void main(void) {");
-
+          src.push("  vec4 newColor;");
+          src.push("  newColor = vColor;");
           if (clipping) {
               src.push("  bool clippable = vFlags2 > 0u;");
               src.push("  if (clippable) {");
@@ -65098,8 +65267,11 @@
                   src.push("   dist += clamp(dot(-sectionPlaneDir" + i + ".xyz, vWorldPosition.xyz - sectionPlanePos" + i + ".xyz), 0.0, 1000.0);");
                   src.push("}");
               }
-              src.push("  if (dist > 0.0) { ");
+              src.push("  if (dist > sliceThickness) { ");
               src.push("      discard;");
+              src.push("  }");
+              src.push("  if (dist > 0.0) { ");
+              src.push("      newColor = sliceColor;");
               src.push("  }");
               src.push("}");
           }
@@ -65118,9 +65290,9 @@
               src.push("   float blendFactor       = uSAOParams[3];");
               src.push("   vec2 uv                 = vec2(gl_FragCoord.x / viewportWidth, gl_FragCoord.y / viewportHeight);");
               src.push("   float ambient           = smoothstep(blendCutoff, 1.0, unpackRGBToFloat(texture(uOcclusionTexture, uv))) * blendFactor;");
-              src.push("   outColor            = vec4(vColor.rgb * ambient, 1.0);");
+              src.push("   outColor            = vec4(newColor.rgb * ambient, 1.0);");
           } else {
-              src.push("   outColor            = vColor;");
+              src.push("   outColor            = newColor;");
           }
 
           src.push("}");
@@ -65562,10 +65734,14 @@
                   src.push("uniform vec3 sectionPlanePos" + i + ";");
                   src.push("uniform vec3 sectionPlaneDir" + i + ";");
               }
+              src.push("uniform float sliceThickness;");
+              src.push("uniform vec4 sliceColor;");
           }
           src.push("uniform vec4 color;");
           src.push("out vec4 outColor;");
           src.push("void main(void) {");
+          src.push("  vec4 newColor;");
+          src.push("  newColor = color;");
           if (clipping) {
               src.push("  bool clippable = vFlags2 > 0u;");
               src.push("  if (clippable) {");
@@ -65575,15 +65751,18 @@
                   src.push("   dist += clamp(dot(-sectionPlaneDir" + i + ".xyz, vWorldPosition.xyz - sectionPlanePos" + i + ".xyz), 0.0, 1000.0);");
                   src.push("}");
               }
-              src.push("  if (dist > 0.0) { ");
+              src.push("  if (dist > sliceThickness) { ");
               src.push("      discard;");
+              src.push("  }");
+              src.push("  if (dist > 0.0) { ");
+              src.push("      newColor = sliceColor;");
               src.push("  }");
               src.push("}");
           }
           if (scene.logarithmicDepthBufferEnabled) {
               src.push("    gl_FragDepth = isPerspective == 0.0 ? gl_FragCoord.z : log2( vFragDepth ) * logDepthBufFC * 0.5;");
           }
-          src.push("    outColor = color;");
+          src.push("    outColor = newColor;");
           src.push("}");
           return src;
       }
@@ -65982,10 +66161,14 @@
                   src.push("uniform vec3 sectionPlanePos" + i + ";");
                   src.push("uniform vec3 sectionPlaneDir" + i + ";");
               }
+              src.push("uniform float sliceThickness;");
+              src.push("uniform vec4 sliceColor;");
           }
           src.push("in vec4 vColor;");
           src.push("out vec4 outColor;");
           src.push("void main(void) {");
+          src.push("  vec4 newColor;");
+          src.push("  newColor = vColor;");
           if (clipping) {
               src.push("  bool clippable = vFlags2 > 0u;");
               src.push("  if (clippable) {");
@@ -65995,13 +66178,18 @@
                   src.push("   dist += clamp(dot(-sectionPlaneDir" + i + ".xyz, vWorldPosition.xyz - sectionPlanePos" + i + ".xyz), 0.0, 1000.0);");
                   src.push("}");
               }
-              src.push("  if (dist > 0.0) { discard; }");
+              src.push("  if (dist > sliceThickness) { ");
+              src.push("      discard;");
+              src.push("  }");
+              src.push("  if (dist > 0.0) { ");
+              src.push("      newColor = sliceColor;");
+              src.push("  }");
               src.push("}");
           }
           if (scene.logarithmicDepthBufferEnabled) {
               src.push("    gl_FragDepth = isPerspective == 0.0 ? gl_FragCoord.z : log2( vFragDepth ) * logDepthBufFC * 0.5;");
           }
-          src.push("   outColor            = vColor;");
+          src.push("   outColor            = newColor;");
           src.push("}");
           return src;
       }
@@ -66391,10 +66579,14 @@
                   src.push("uniform vec3 sectionPlanePos" + i + ";");
                   src.push("uniform vec3 sectionPlaneDir" + i + ";");
               }
+              src.push("uniform float sliceThickness;");
+              src.push("uniform vec4 sliceColor;");
           }
           src.push("in vec4 vColor;");
           src.push("out vec4 outColor;");
           src.push("void main(void) {");
+          src.push("  vec4 newColor;");
+          src.push("  newColor = vColor;");
           if (clipping) {
               src.push("  bool clippable = vFlags2 > 0u;");
               src.push("  if (clippable) {");
@@ -66404,13 +66596,18 @@
                   src.push("   dist += clamp(dot(-sectionPlaneDir" + i + ".xyz, vWorldPosition.xyz - sectionPlanePos" + i + ".xyz), 0.0, 1000.0);");
                   src.push("}");
               }
-              src.push("  if (dist > 0.0) { discard; }");
+              src.push("  if (dist > sliceThickness) { ");
+              src.push("      discard;");
+              src.push("  }");
+              src.push("  if (dist > 0.0) { ");
+              src.push("      newColor = sliceColor;");
+              src.push("  }");
               src.push("}");
           }
           if (scene.logarithmicDepthBufferEnabled) {
                 src.push("    gl_FragDepth = isPerspective == 0.0 ? gl_FragCoord.z : log2( vFragDepth ) * logDepthBufFC * 0.5;");
           }
-          src.push("   outColor            = vColor;");
+          src.push("   outColor            = newColor;");
           src.push("}");
           return src;
       }
@@ -79564,22 +79761,12 @@
       return rgb;
   }
 
-  const distVec3 = math.vec3();
-  const tmpVec3 = math.vec3();
-
-  const lengthWire = (x1, y1, x2, y2) => {
-      var a = x1 - x2;
-      var b = y1 - y2;
-      return Math.sqrt(a * a + b * b);
-  };
-
-  function determineMeasurementOrientation(A, B, distance) {
-      const yDiff = Math.abs(B[1] - A[1]);
-
-      return yDiff > distance ? 'Vertical' : 'Horizontal';
-  }
-
-  // function findDistance
+  const tmpVec3a = math.vec3();
+  const tmpVec3b = math.vec3();
+  const tmpVec3c = math.vec3();
+  math.vec4();
+  math.vec4();
+  math.vec4();
 
   /**
    * @desc Measures the distance between two 3D points.
@@ -79593,7 +79780,9 @@
        */
       constructor(plugin, cfg = {}) {
 
-          super(plugin.viewer.scene, cfg);
+          const scene = plugin.viewer.scene;
+
+          super(scene, cfg);
 
           /**
            * The {@link DistanceMeasurementsPlugin} that owns this DistanceMeasurement.
@@ -79601,595 +79790,249 @@
            */
           this.plugin = plugin;
 
-          this._container = cfg.container;
-          if (!this._container) {
+          const container = cfg.container;
+          if (!container) {
               throw "config missing: container";
           }
 
-          this._eventSubs = {};
+          this._color = cfg.color || plugin.defaultColor;
 
-          var scene = this.plugin.viewer.scene;
+          const channel = function(v, defaultIfUndefined) {
+              const listeners = [ ];
+              let value = v !== undefined ? Boolean(v) : defaultIfUndefined;
+              return {
+                  reg: (l) => listeners.push(l),
+                  get: () => value,
+                  set: (v) => {
+                      value = v !== undefined ? Boolean(v) : defaultIfUndefined;
+                      listeners.forEach(l => l(value));
+                  }
+              };
+          };
 
-          this._originWorld = math.vec3();
-          this._targetWorld = math.vec3();
+          this._visible               = channel(cfg.visible,               plugin.defaultVisible);
+          this._originVisible         = channel(cfg.originVisible,         plugin.defaultOriginVisible);
+          this._targetVisible         = channel(cfg.targetVisible,         plugin.defaultTargetVisible);
+          this._axisVisible           = channel(cfg.axisVisible,           plugin.defaultAxisVisible);
+          this._xAxisVisible          = channel(cfg.xAxisVisible,          plugin.defaultAxisVisible);
+          this._yAxisVisible          = channel(cfg.yAxisVisible,          plugin.defaultAxisVisible);
+          this._zAxisVisible          = channel(cfg.zAxisVisible,          plugin.defaultAxisVisible);
+          this._axisEnabled           = channel(true,                      plugin.defaultAxisVisible);
+          this._wireVisible           = channel(cfg.wireVisible,           plugin.defaultWireVisible);
+          this._xLabelEnabled         = channel(cfg.xLabelEnabled,         plugin.defaultXLabelEnabled);
+          this._yLabelEnabled         = channel(cfg.yLabelEnabled,         plugin.defaultYLabelEnabled);
+          this._zLabelEnabled         = channel(cfg.zLabelEnabled,         plugin.defaultZLabelEnabled);
+          this._lengthLabelEnabled    = channel(cfg.lengthLabelEnabled,    plugin.defaultLengthLabelEnabled);
+          this._labelsVisible         = channel(cfg.labelsVisible,         plugin.defaultLabelsVisible);
+          this._clickable             = channel(false,                     false);
+          this._labelsOnWires         = channel(cfg.labelsOnWires,         plugin.defaultLabelsOnWires);
+          this._useRotationAdjustment = channel(cfg.useRotationAdjustment, plugin.useRotationAdjustment);
 
-          this._wp = new Float64Array(24); //world position
-          this._vp = new Float64Array(24); //view position
-          this._pp = new Float64Array(24);
-          this._cp = new Float64Array(8); //canvas position
+          this._axesBasis = math.identityMat4();
+          this.approximate = cfg.approximate;
 
-          this._xAxisLabelCulled = false;
-          this._yAxisLabelCulled = false;
-          this._zAxisLabelCulled = false;
 
-          this._color = cfg.color || this.plugin.defaultColor;
+          const canvas = scene.canvas.canvas;
 
           const onMouseOver = cfg.onMouseOver ? (event) => {
               cfg.onMouseOver(event, this);
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new MouseEvent('mouseover', event));
+              canvas.dispatchEvent(new MouseEvent('mouseover', event));
           } : null;
 
           const onMouseLeave = cfg.onMouseLeave ? (event) => {
               cfg.onMouseLeave(event, this);
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new MouseEvent('mouseleave', event));
+              canvas.dispatchEvent(new MouseEvent('mouseleave', event));
           } : null;
-
-          const onMouseDown = (event) => {
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new MouseEvent('mousedown', event));
-          } ;
-
-          const onMouseUp =  (event) => {
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new MouseEvent('mouseup', event));
-          };
-
-          const onMouseMove =  (event) => {
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new MouseEvent('mousemove', event));
-          };
 
           const onContextMenu = cfg.onContextMenu ? (event) => {
               cfg.onContextMenu(event, this);
           } : null;
 
-          const onMouseWheel = (event) => {
-              this.plugin.viewer.scene.canvas.canvas.dispatchEvent(new WheelEvent('wheel', event));
+          const onMouseDown  = (event) => canvas.dispatchEvent(new MouseEvent('mousedown', event));
+          const onMouseUp    = (event) => canvas.dispatchEvent(new MouseEvent('mouseup', event));
+          const onMouseMove  = (event) => canvas.dispatchEvent(new MouseEvent('mousemove', event));
+          const onMouseWheel = (event) => canvas.dispatchEvent(new WheelEvent('wheel', event));
+
+
+          this._cleanups = [ ];
+
+          [ "units", "scale" ].forEach(evt => {
+              const handler = scene.metrics.on("units", () => this._update());
+              this._cleanups.push(() => scene.metrics.off(handler));
+          });
+
+          this._drawables = [ ];
+
+          const registerDrawable = (drawable, visibilityChannels) => {
+              const updateVisibility = () => drawable.setVisible(visibilityChannels.every(ch => ch.get()));
+              visibilityChannels.forEach(ch => ch.reg(updateVisibility));
+              this._drawables.push(drawable);
+              this._cleanups.push(() => drawable.destroy());
           };
 
-          this._originDot = new Dot3D(scene, cfg.origin, this._container, {
-              fillColor: this._color,
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 2 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
+          const makeWire = (color, thickness, visibilityChannels) => {
+              const wire = new Wire3D(scene, container, {
+                  color: color,
+                  thickness: thickness,
+                  thicknessClickable: 6,
+                  zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 1 : undefined,
+                  onMouseOver,
+                  onMouseLeave,
+                  onMouseWheel,
+                  onMouseDown,
+                  onMouseUp,
+                  onMouseMove,
+                  onContextMenu
+              });
+              registerDrawable(wire, visibilityChannels);
+              return {
+                  setEnds: (p0, p1) => wire.setEnds(p0, p1),
+                  setColor: value => wire.setColor(value)
+              };
+          };
+          this._lengthWire = makeWire(this._color, 2, [ this._visible, this._wireVisible ]);
+          this._xAxisWire  = makeWire("red",       1, [ this._visible, this._axisEnabled, this._axisVisible, this._xAxisVisible ]);
+          this._yAxisWire  = makeWire("green",     1, [ this._visible, this._axisEnabled, this._axisVisible, this._yAxisVisible ]);
+          this._zAxisWire  = makeWire("blue",      1, [ this._visible, this._axisEnabled, this._axisVisible, this._zAxisVisible ]);
 
-          this._targetDot = new Dot3D(scene, cfg.target, this._container, {
-              fillColor: this._color,
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 2 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
+          const makeLabel = (color, zIndexOffset, visibilityChannels) => {
+              const label = new Label3D(scene, container, {
+                  fillColor: color,
+                  zIndex: plugin.zIndex !== undefined ? plugin.zIndex + zIndexOffset : undefined,
+                  onMouseOver,
+                  onMouseLeave,
+                  onMouseWheel,
+                  onMouseDown,
+                  onMouseUp,
+                  onMouseMove,
+                  onContextMenu
+              });
+              registerDrawable(label, visibilityChannels);
+              return {
+                  setFillColor:  value => label.setFillColor(value),
+                  setPosOnWire:  (p0, p1, offset, labelMinAxisLength) => label.setPosOnWire(p0, p1, offset, labelMinAxisLength),
+                  setPosBetween: (p0, p1, p2) => label.setPosBetween(p0, p1, p2),
+                  setText:       str => label.setText(str.replace(/ /g, "&nbsp;"))
+              };
+          };
+          this._lengthLabel = makeLabel(this._color, 4, [ this._visible, this._wireVisible, this._labelsVisible, this._clickable, this._axisEnabled, this._lengthLabelEnabled ]);
+          this._xAxisLabel  = makeLabel("red",       3, [ this._visible, this._axisEnabled, this._axisVisible, this._xAxisVisible, this._labelsVisible, this._clickable, this._xLabelEnabled ]);
+          this._yAxisLabel  = makeLabel("green",     3, [ this._visible, this._axisEnabled, this._axisVisible, this._yAxisVisible, this._labelsVisible, this._clickable, this._yLabelEnabled ]);
+          this._zAxisLabel  = makeLabel("blue",      3, [ this._visible, this._axisEnabled, this._axisVisible, this._zAxisVisible, this._labelsVisible, this._clickable, this._zLabelEnabled ]);
 
-          this._lengthWire = new Wire(this._container, {
-              color: this._color,
-              thickness: 2,
-              thicknessClickable: 6,
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 1 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
+          const makeDot = (cfg, visibilityChannels) => {
+              const dot = new Dot3D(scene, cfg, container, {
+                  fillColor: this._color,
+                  zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 2 : undefined,
+                  onMouseOver,
+                  onMouseLeave,
+                  onMouseWheel,
+                  onMouseDown,
+                  onMouseUp,
+                  onMouseMove,
+                  onContextMenu
+              });
+              dot.on("worldPos", () => this._update());
+              registerDrawable(dot, visibilityChannels);
+              return dot;
+          };
+          this._originDot = makeDot(cfg.origin, [ this._visible, this._originVisible ]);
+          this._targetDot = makeDot(cfg.target, [ this._visible, this._targetVisible ]);
 
-          this._xAxisWire = new Wire(this._container, {
-              color: "#FF0000",
-              thickness: 1,
-              thicknessClickable: 6,
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 1 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
+          this._update();
+      }
 
-          this._yAxisWire = new Wire(this._container, {
-              color: "green",
-              thickness: 1,
-              thicknessClickable: 6,
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 1 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
+      _update() {
+          if (! this._targetDot) {
+              return;
+          }
 
-          this._zAxisWire = new Wire(this._container, {
-              color: "blue",
-              thickness: 1,
-              thicknessClickable: 6,
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 1 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
+          const p0 = this._originDot.worldPos;
+          const p1 = this._targetDot.worldPos;
+          const axesBasis = this._axesBasis;
+          const delta = math.subVec3(p1, p0, tmpVec3a);
+          const factors = math.transformVec3(axesBasis, delta, delta);
 
-          this._lengthLabel = new Label(this._container, {
-              fillColor: this._color,
-              prefix: "",
-              text: "",
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 4 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
+          const measurementOrientationVertical = this._useRotationAdjustment.get() && Math.abs(delta[1]) > 0;
 
-          this._xAxisLabel = new Label(this._container, {
-              fillColor: "red",
-              prefix: "X",
-              text: "",
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 3 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
+          const setWireCoordinates = (xEnd, zStart) => {
 
-          this._yAxisLabel = new Label(this._container, {
-              fillColor: "green",
-              prefix: "Y",
-              text: "",
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 3 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
+              const metrics = this.plugin.viewer.scene.metrics;
+              const scale = metrics.scale;
+              const unit = metrics.unitsInfo[metrics.units].abbrev;
 
-          this._zAxisLabel = new Label(this._container, {
-              fillColor: "blue",
-              prefix: "Z",
-              text: "",
-              zIndex: plugin.zIndex !== undefined ? plugin.zIndex + 3 : undefined,
-              onMouseOver,
-              onMouseLeave,
-              onMouseWheel,
-              onMouseDown,
-              onMouseUp,
-              onMouseMove,
-              onContextMenu
-          });
+              const setAxisLabelCoords = (label, a, b, offsetIdx) => {
+                  if (this._labelsOnWires.get()) {
+                      label.setPosOnWire(a, b, 0, this.plugin.labelMinAxisLength);
+                  } else {
+                      label.setPosOnWire(p0, p1, offsetIdx * 35, 0);
+                  }
+              };
+              const unitStr = len => (this._approximate ? " ~ " : " = ") + len.toFixed(2) + unit;
 
-          this._measurementOrientation = 'Horizontal';
-          this._wpDirty = false;
-          this._vpDirty = false;
-          this._cpDirty = false;
-          this._sectionPlanesDirty = true;
+              this._xAxisWire.setEnds(p0, xEnd);
+              setAxisLabelCoords(this._xAxisLabel, p0, xEnd, 1);
+              this._xAxisLabel.setText("X" + unitStr(math.distVec3(p0, xEnd) * scale));
 
-          this._visible = false;
-          this._originVisible = false;
-          this._targetVisible = false;
-          this._useRotationAdjustment = false;
-          this._wireVisible = false;
-          this._axisVisible = false;
-          this._xAxisVisible = false;
-          this._yAxisVisible = false;
-          this._zAxisVisible = false;
-          this._axisEnabled = true;
-          this._xLabelEnabled = false;
-          this._yLabelEnabled = false;
-          this._zLabelEnabled = false;
-          this._lengthLabelEnabled = false;
-          this._labelsVisible = false;
-          this._labelsOnWires = false;
-          this._clickable = false;
+              this._yAxisWire.setEnds(xEnd, zStart);
+              setAxisLabelCoords(this._yAxisLabel, xEnd, zStart, 2);
+              this._yAxisLabel.setText("Y" + unitStr(math.distVec3(xEnd, zStart) * scale));
 
-          this._originDot.on("worldPos", (value) => {
-              this._originWorld.set(value || [0,0,0]); 
-              this._wpDirty = true;
-              this._needUpdate(0); // No lag
-          });
+              this._zAxisWire.setEnds(zStart, p1);
+              setAxisLabelCoords(this._zAxisLabel, zStart, p1, 3);
+              this._zAxisLabel.setText((measurementOrientationVertical ? "" : "Z") + unitStr(math.distVec3(zStart, p1) * scale));
 
-          this._targetDot.on("worldPos", (value) => {
-              this._targetWorld.set(value || [0,0,0]); 
-              this._wpDirty = true;
-              this._needUpdate(0); // No lag
-          });
+              this._lengthWire.setEnds(p0, p1);
+              setAxisLabelCoords(this._lengthLabel, p0, p1, 0);
+              this._length = math.distVec3(p0, p1) * scale;
+              this._lengthLabel.setText(unitStr(this._length));
+          };
 
-          this._onViewMatrix = scene.camera.on("viewMatrix", () => {
-              this._vpDirty = true;
-              this._needUpdate(0); // No lag
-          });
+          if (measurementOrientationVertical) {
+              tmpVec3c[0] = p0[0];
+              tmpVec3c[1] = p1[1];
+              tmpVec3c[2] = p0[2];
 
-          this._onProjMatrix = scene.camera.on("projMatrix", () => {
-              this._cpDirty = true;
-              this._needUpdate();
-          });
+              setWireCoordinates(p0, tmpVec3c);
+          }
+          else {
+              tmpVec3b[0] = p0[0] + axesBasis[0] * factors[0];
+              tmpVec3b[1] = p0[1] + axesBasis[4] * factors[0];
+              tmpVec3b[2] = p0[2] + axesBasis[8] * factors[0];
 
-          this._onCanvasBoundary = scene.canvas.on("boundary", () => {
-              this._cpDirty = true;
-              this._needUpdate(0); // No lag
-          });
+              tmpVec3c[0] = tmpVec3b[0] + axesBasis[1] * factors[1];
+              tmpVec3c[1] = tmpVec3b[1] + axesBasis[5] * factors[1];
+              tmpVec3c[2] = tmpVec3b[2] + axesBasis[9] * factors[1];
 
-          this._onMetricsUnits = scene.metrics.on("units", () => {
-              this._cpDirty = true;
-              this._needUpdate();
-          });
-
-          this._onMetricsScale = scene.metrics.on("scale", () => {
-              this._cpDirty = true;
-              this._needUpdate();
-          });
-
-          this._onMetricsOrigin = scene.metrics.on("origin", () => {
-              this._cpDirty = true;
-              this._needUpdate();
-          });
-
-          this._onSectionPlaneUpdated = scene.on("sectionPlaneUpdated", () =>{
-              this._sectionPlanesDirty = true;
-              this._needUpdate();
-          });
-
-          this.approximate = cfg.approximate;
-          this.visible = cfg.visible;
-          this.originVisible = cfg.originVisible;
-          this.targetVisible = cfg.targetVisible;
-          this.wireVisible = cfg.wireVisible;
-          this.axisVisible = cfg.axisVisible;
-          this.xAxisVisible = cfg.xAxisVisible;
-          this.yAxisVisible = cfg.yAxisVisible;
-          this.zAxisVisible = cfg.zAxisVisible;
-          this.xLabelEnabled = cfg.xLabelEnabled;
-          this.yLabelEnabled = cfg.yLabelEnabled;
-          this.zLabelEnabled = cfg.zLabelEnabled;
-          this.lengthLabelEnabled = cfg.lengthLabelEnabled;
-          this.labelsVisible = cfg.labelsVisible;
-          this.labelsOnWires = cfg.labelsOnWires;
-          this._useRotationAdjustment = cfg.useRotationAdjustment;
-
-          /**
-           * @type {number[]}
-           */
-          this._axesBasis = [
-              1, 0, 0, 0,
-              0, 1, 0, 0,
-              0, 0, 1, 0,
-              0, 0, 0, 1,
-          ];
+              setWireCoordinates(tmpVec3b, tmpVec3c);
+          }
       }
 
       /**
        * Sets the axes basis for the measurement.
-       * 
+       *
        * The value is a 4x4 matrix where each column-vector defines an axis and must have unit length.
-       * 
+       *
        * This is the ```identity``` matrix by default, meaning the measurement axes are the same as the world axes.
-       * 
-       * @param {number[]} value 
+       *
+       * @param {number[]} value
        */
       set axesBasis(value) {
-          this._axesBasis = value.slice();
-          this._wpDirty = true;
-          this._needUpdate(0); // No lag
+          this._axesBasis.set(value);
+          this._update();
       }
 
       /**
        * Gets the axes basis for the measurement.
-       * 
+       *
        * The value is a 4x4 matrix where each column-vector defines an axis and must have unit length.
-       * 
+       *
        * This is the ```identity``` matrix by default, meaning the measurement axes are the same as the world axes.
-       * 
+       *
        * @type {number[]}
        */
       get axesBasis() {
           return this._axesBasis;
-      }
-
-      _update() {
-
-          if (!this._visible) {
-              return;
-          }
-
-          const scene = this.plugin.viewer.scene;
-
-          if (this._wpDirty) {
-              const delta = math.subVec3(
-                  this._targetWorld,
-                  this._originWorld,
-                  tmpVec3
-              );
-
-              /**
-               * The length detected for each measurement axis.
-               */
-              this._factors = math.transformVec3(this._axesBasis, delta);
-
-              this._measurementOrientation = determineMeasurementOrientation(this._originWorld, this._targetWorld, 0);
-              if (this._measurementOrientation === 'Vertical' && this._useRotationAdjustment) {
-                  this._wp[0] = this._originWorld[0];
-                  this._wp[1] = this._originWorld[1];
-                  this._wp[2] = this._originWorld[2];
-                  this._wp[3] = 1.0;
-
-                  this._wp[4] = this._originWorld[0]; //x-axis
-                  this._wp[5] = this._originWorld[1];
-                  this._wp[6] = this._originWorld[2];
-                  this._wp[7] = 1.0;
-
-                  this._wp[8] = this._originWorld[0]; //x-axis
-                  this._wp[9] = this._targetWorld[1]; //y-axis
-                  this._wp[10] = this._originWorld[2];
-                  this._wp[11] = 1.0;
-
-                  this._wp[12] = this._targetWorld[0];
-                  this._wp[13] = this._targetWorld[1];
-                  this._wp[14] = this._targetWorld[2];
-                  this._wp[15] = 1.0;
-              }
-              else {
-
-                  this._wp[0] = this._originWorld[0];
-                  this._wp[1] = this._originWorld[1];
-                  this._wp[2] = this._originWorld[2];
-                  this._wp[3] = 1.0;
-
-                  this._wp[4] = this._originWorld[0] + this._axesBasis[0]*this._factors[0];
-                  this._wp[5] = this._originWorld[1] + this._axesBasis[4]*this._factors[0];
-                  this._wp[6] = this._originWorld[2] + this._axesBasis[8]*this._factors[0];
-                  this._wp[7] = 1.0;
-
-                  this._wp[8] = this._originWorld[0] + this._axesBasis[0]*this._factors[0]+ this._axesBasis[1]*this._factors[1];
-                  this._wp[9] = this._originWorld[1] + this._axesBasis[4]*this._factors[0]+ this._axesBasis[5]*this._factors[1];
-                  this._wp[10] = this._originWorld[2] + this._axesBasis[8]*this._factors[0]+ this._axesBasis[9]*this._factors[1];                this._wp[11] = 1.0;
-
-                  this._wp[12] = this._targetWorld[0];
-                  this._wp[13] = this._targetWorld[1];
-                  this._wp[14] = this._targetWorld[2];
-                  this._wp[15] = 1.0;
-              }
-              
-
-              this._wpDirty = false;
-              this._vpDirty = true;
-          }
-
-          if (this._vpDirty) {
-
-              math.transformPositions4(scene.camera.viewMatrix, this._wp, this._vp);
-
-              this._vp[3] = 1.0;
-              this._vp[7] = 1.0;
-              this._vp[11] = 1.0;
-              this._vp[15] = 1.0;
-
-              this._vpDirty = false;
-              this._cpDirty = true;
-          }
-
-          if (this._sectionPlanesDirty) {
-
-              if (this._isSliced(this._originWorld) || this._isSliced(this._targetWorld)) {
-                  this._xAxisLabel.setCulled(true);
-                  this._yAxisLabel.setCulled(true);
-                  this._zAxisLabel.setCulled(true);
-                  this._lengthLabel.setCulled(true);
-                  this._xAxisWire.setCulled(true);
-                  this._yAxisWire.setCulled(true);
-                  this._zAxisWire.setCulled(true);
-                  this._lengthWire.setCulled(true);
-                  this._originDot.setCulled(true);
-                  this._targetDot.setCulled(true);
-                  return;
-              } else {
-                  this._xAxisLabel.setCulled(false);
-                  this._yAxisLabel.setCulled(false);
-                  this._zAxisLabel.setCulled(false);
-                  this._lengthLabel.setCulled(false);
-                  this._xAxisWire.setCulled(false);
-                  this._yAxisWire.setCulled(false);
-                  this._zAxisWire.setCulled(false);
-                  this._lengthWire.setCulled(false);
-                  this._originDot.setCulled(false);
-                  this._targetDot.setCulled(false);
-              }
-
-              this._sectionPlanesDirty = true;
-          }
-
-          const near = -0.3;
-          const vpz1 = this._originDot.viewPos[2];
-          const vpz2 = this._targetDot.viewPos[2];
-
-          if (vpz1 > near || vpz2 > near) {
-
-              this._xAxisLabel.setCulled(true);
-              this._yAxisLabel.setCulled(true);
-              this._zAxisLabel.setCulled(true);
-              this._lengthLabel.setCulled(true);
-
-              this._xAxisWire.setVisible(false);
-              this._yAxisWire.setVisible(false);
-              this._zAxisWire.setVisible(false);
-              this._lengthWire.setVisible(false);
-
-              this._originDot.setVisible(false);
-              this._targetDot.setVisible(false);
-
-              return;
-          }
-
-          if (this._cpDirty) {
-
-              math.transformPositions4(scene.camera.project.matrix, this._vp, this._pp);
-
-              var pp = this._pp;
-              var cp = this._cp;
-
-              var canvas = scene.canvas.canvas;
-              var offsets = canvas.getBoundingClientRect();
-              const containerOffsets = this._container.getBoundingClientRect();
-              var top = offsets.top - containerOffsets.top;
-              var left = offsets.left - containerOffsets.left;
-              var aabb = scene.canvas.boundary;
-              var canvasWidth = aabb[2];
-              var canvasHeight = aabb[3];
-              var j = 0;
-
-              const metrics = this.plugin.viewer.scene.metrics;
-              const scale = metrics.scale;
-              const units = metrics.units;
-              const unitInfo = metrics.unitsInfo[units];
-              const unitAbbrev = unitInfo.abbrev;
-
-              for (var i = 0, len = pp.length; i < len; i += 4) {
-                  cp[j] = left + Math.floor((1 + pp[i + 0] / pp[i + 3]) * canvasWidth / 2);
-                  cp[j + 1] = top + Math.floor((1 - pp[i + 1] / pp[i + 3]) * canvasHeight / 2);
-                  j += 2;
-              }
-
-              this._lengthWire.setStartAndEnd(cp[0], cp[1], cp[6], cp[7]);
-
-              this._xAxisWire.setStartAndEnd(cp[0], cp[1], cp[2], cp[3]);
-              this._yAxisWire.setStartAndEnd(cp[2], cp[3], cp[4], cp[5]);
-              this._zAxisWire.setStartAndEnd(cp[4], cp[5], cp[6], cp[7]);
-
-              if (!this.labelsVisible) {
-
-                  this._lengthLabel.setCulled(true);
-
-                  this._xAxisLabel.setCulled(true);
-                  this._yAxisLabel.setCulled(true);
-                  this._zAxisLabel.setCulled(true);
-
-              } else {
-
-                  this._lengthLabel.setPosOnWire(cp[0], cp[1], cp[6], cp[7]);
-
-                  if (this.labelsOnWires) {
-                      this._xAxisLabel.setPosOnWire(cp[0], cp[1], cp[2], cp[3]);
-                      this._yAxisLabel.setPosOnWire(cp[2], cp[3], cp[4], cp[5]);
-                      this._zAxisLabel.setPosOnWire(cp[4], cp[5], cp[6], cp[7]);
-                  } else {
-                      const labelOffset = 35;
-                      let currentLabelOffset = labelOffset;
-                      this._xAxisLabel.setPosOnWire(cp[0], cp[1] + currentLabelOffset, cp[6], cp[7] + currentLabelOffset);
-                      currentLabelOffset += labelOffset;
-                      this._yAxisLabel.setPosOnWire(cp[0], cp[1] + currentLabelOffset, cp[6], cp[7] + currentLabelOffset);
-                      currentLabelOffset += labelOffset;
-                      this._zAxisLabel.setPosOnWire(cp[0], cp[1] + currentLabelOffset, cp[6], cp[7] + currentLabelOffset);
-                  }
-
-                  const tilde = this._approximate ? " ~ " : " = ";
-
-                  this._length = Math.abs(math.lenVec3(math.subVec3(this._targetWorld, this._originWorld, distVec3)));
-                  this._lengthLabel.setText(tilde + (this._length * scale).toFixed(2) + unitAbbrev);
-
-                  const xAxisCanvasLength = Math.abs(lengthWire(cp[0], cp[1], cp[2], cp[3]));
-                  const yAxisCanvasLength = Math.abs(lengthWire(cp[2], cp[3], cp[4], cp[5]));
-                  const zAxisCanvasLength = Math.abs(lengthWire(cp[4], cp[5], cp[6], cp[7]));
-
-                  const labelMinAxisLength = this.plugin.labelMinAxisLength;
-
-                  if (this.labelsOnWires){
-                      this._xAxisLabelCulled = (xAxisCanvasLength < labelMinAxisLength);
-                      this._yAxisLabelCulled = (yAxisCanvasLength < labelMinAxisLength);
-                      this._zAxisLabelCulled = (zAxisCanvasLength < labelMinAxisLength);
-                  } else {
-                      this._xAxisLabelCulled = false;
-                      this._yAxisLabelCulled = false;
-                      this._zAxisLabelCulled = false;
-                  }
-
-                  if (!this._xAxisLabelCulled) {
-                      this._xAxisLabel.setText(tilde + Math.abs(this._factors[0] * scale).toFixed(2) + unitAbbrev);
-                      this._xAxisLabel.setCulled(!this.axisVisible);
-                  } else {
-                      this._xAxisLabel.setCulled(true);
-                  }
-
-                  if (!this._yAxisLabelCulled) {
-                      this._yAxisLabel.setText(tilde + Math.abs(this._factors[1] * scale).toFixed(2) + unitAbbrev);
-                      this._yAxisLabel.setCulled(!this.axisVisible);
-                  } else {
-                      this._yAxisLabel.setCulled(true);
-                  }
-
-                  if (!this._zAxisLabelCulled) {
-                      if (this._measurementOrientation === 'Vertical' && this._useRotationAdjustment) {
-                          this._zAxisLabel.setPrefix("");
-                          this._zAxisLabel.setText(tilde + Math.abs(math.lenVec3(math.subVec3(this._targetWorld, [this._originWorld[0], this._targetWorld[1], this._originWorld[2]], distVec3)) * scale).toFixed(2) + unitAbbrev);
-                      }
-                      else {
-                          this._zAxisLabel.setPrefix("Z");
-                          this._zAxisLabel.setText(tilde + Math.abs(this._factors[2] * scale).toFixed(2) + unitAbbrev);
-                      }
-                      this._zAxisLabel.setCulled(!this.axisVisible);
-                  } else {
-                      this._zAxisLabel.setCulled(true);
-                  }
-              }
-
-              // this._xAxisLabel.setVisible(this.axisVisible && this.xAxisVisible);
-              // this._yAxisLabel.setVisible(this.axisVisible && this.yAxisVisible);
-              // this._zAxisLabel.setVisible(this.axisVisible && this.zAxisVisible);
-              // this._lengthLabel.setVisible(false);
-
-              this._originDot.setVisible(this._visible && this._originVisible);
-              this._targetDot.setVisible(this._visible && this._targetVisible);
-
-              this._xAxisWire.setVisible(this.axisVisible && this.xAxisVisible);
-              this._yAxisWire.setVisible(this.axisVisible && this.yAxisVisible);
-              this._zAxisWire.setVisible(this.axisVisible && this.zAxisVisible);
-
-              this._lengthWire.setVisible(this.wireVisible);
-              this._lengthLabel.setCulled(!this.wireVisible);
-
-              this._cpDirty = false;
-          }
-      }
-
-      _isSliced(positions) {
-         const sectionPlanes = this.scene._sectionPlanesState.sectionPlanes;
-          for (let i = 0, len = sectionPlanes.length; i < len; i++) {
-              const sectionPlane = sectionPlanes[i];
-              if (math.planeClipsPositions3(sectionPlane.pos, sectionPlane.dir, positions, 4)) {
-                  return true
-              }
-          }
-          return false;
       }
 
       /**
@@ -80205,8 +80048,7 @@
               return;
           }
           this._approximate = approximate;
-          this._cpDirty = true;
-          this._needUpdate(0);
+          this._update();
       }
 
       /**
@@ -80244,9 +80086,7 @@
        * @type {Number}
        */
       get length() {
-          this._update();
-          const scale = this.plugin.viewer.scene.metrics.scale;
-          return this._length * scale;
+          return this._length;
       }
 
       get color() {
@@ -80267,31 +80107,7 @@
        * @type {Boolean}
        */
       set visible(value) {
-
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultVisible;
-
-          this._visible = value;
-
-          this._originDot.setVisible(this._visible && this._originVisible);
-          this._targetDot.setVisible(this._visible && this._targetVisible);
-          this._lengthWire.setVisible(this._visible && this._wireVisible);
-          this._lengthLabel.setVisible(this._visible && this._wireVisible && this._lengthLabelEnabled);
-
-          const xAxisVisible = this._visible && this._axisVisible && this._xAxisVisible;
-          const yAxisVisible = this._visible && this._axisVisible && this._yAxisVisible;
-          const zAxisVisible = this._visible && this._axisVisible && this._zAxisVisible;
-
-          this._xAxisWire.setVisible(xAxisVisible);
-          this._yAxisWire.setVisible(yAxisVisible);
-          this._zAxisWire.setVisible(zAxisVisible);
-
-          this._xAxisLabel.setVisible(xAxisVisible && !this._xAxisLabelCulled && this._EnabledVisible);
-          this._yAxisLabel.setVisible(yAxisVisible && !this._yAxisLabelCulled && this._yLabelEnabled);
-          this._zAxisLabel.setVisible(zAxisVisible && !this._zAxisLabelCulled && this._zLabelEnabled);
-
-          this._cpDirty = true;
-
-          this._needUpdate();
+          this._visible.set(value);
       }
 
       /**
@@ -80300,7 +80116,7 @@
        * @type {Boolean}
        */
       get visible() {
-          return this._visible;
+          return this._visible.get();
       }
 
       /**
@@ -80309,9 +80125,7 @@
        * @type {Boolean}
        */
       set originVisible(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultOriginVisible;
-          this._originVisible = value;
-          this._originDot.setVisible(this._visible && this._originVisible);
+          this._originVisible.set(value);
       }
 
       /**
@@ -80320,7 +80134,7 @@
        * @type {Boolean}
        */
       get originVisible() {
-          return this._originVisible;
+          return this._originVisible.get();
       }
 
       /**
@@ -80329,9 +80143,7 @@
        * @type {Boolean}
        */
       set targetVisible(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultTargetVisible;
-          this._targetVisible = value;
-          this._targetDot.setVisible(this._visible && this._targetVisible);
+          this._targetVisible.set(value);
       }
 
       /**
@@ -80340,7 +80152,7 @@
        * @type {Boolean}
        */
       get targetVisible() {
-          return this._targetVisible;
+          return this._targetVisible.get();
       }
 
       /**
@@ -80349,8 +80161,8 @@
        * @type {Boolean}
        */
       set useRotationAdjustment(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.useRotationAdjustment;
-          this._useRotationAdjustment = value;
+          this._useRotationAdjustment.set(value);
+          this._update();
       }
 
       /**
@@ -80359,7 +80171,7 @@
        * @type {Boolean}
        */
       get useRotationAdjustment() {
-          return this._useRotationAdjustment;
+          return this._useRotationAdjustment.get();
       }
 
       /**
@@ -80370,17 +80182,7 @@
        * @type {Boolean}
        */
       set axisEnabled(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultAxisVisible;
-          this._axisEnabled = value;
-          var axisVisible = this._visible && this._axisVisible && this._axisEnabled;
-          this._xAxisWire.setVisible(axisVisible && this._xAxisVisible);
-          this._yAxisWire.setVisible(axisVisible && this._yAxisVisible);
-          this._zAxisWire.setVisible(axisVisible && this._zAxisVisible);
-          this._xAxisLabel.setVisible(axisVisible && !this._xAxisLabelCulled&& this._xAxisVisible && this._xLabelEnabled);
-          this._yAxisLabel.setVisible(axisVisible && !this._yAxisLabelCulled&& this._xAxisVisible && this._yLabelEnabled);
-          this._zAxisLabel.setVisible(axisVisible && !this._zAxisLabelCulled&& this._xAxisVisible && this._zLabelEnabled);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._axisEnabled.set(value);
       }
 
       /**
@@ -80391,7 +80193,7 @@
        * @type {Boolean}
        */
       get axisEnabled() {
-          return this._axisEnabled;
+          return this._axisEnabled.get();
       }
 
       /**
@@ -80402,17 +80204,7 @@
        * @type {Boolean}
        */
       set axisVisible(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultAxisVisible;
-          this._axisVisible = value;
-          var axisVisible = this._visible && this._axisVisible && this._axisEnabled;
-          this._xAxisWire.setVisible(axisVisible && this._xAxisVisible);
-          this._yAxisWire.setVisible(axisVisible && this._yAxisVisible);
-          this._zAxisWire.setVisible(axisVisible && this._zAxisVisible);
-          this._xAxisLabel.setVisible(axisVisible && !this._xAxisLabelCulled&& this._xAxisVisible);
-          this._yAxisLabel.setVisible(axisVisible && !this._yAxisLabelCulled&& this._yAxisVisible);
-          this._zAxisLabel.setVisible(axisVisible && !this._zAxisLabelCulled&& this._zAxisVisible);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._axisVisible.set(value);
       }
 
       /**
@@ -80423,7 +80215,7 @@
        * @type {Boolean}
        */
       get axisVisible() {
-          return this._axisVisible;
+          return this._axisVisible.get();
       }
 
       /**
@@ -80434,13 +80226,7 @@
        * @type {Boolean}
        */
       set xAxisVisible(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultAxisVisible;
-          this._xAxisVisible = value;
-          const axisVisible = this._visible && this._axisVisible && this._xAxisVisible && this._axisEnabled;
-          this._xAxisWire.setVisible(axisVisible);
-          this._xAxisLabel.setVisible(axisVisible && !this._xAxisLabelCulled && this._xLabelEnabled);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._xAxisVisible.set(value);
       }
 
       /**
@@ -80451,7 +80237,7 @@
        * @type {Boolean}
        */
       get xAxisVisible() {
-          return this._xAxisVisible;
+          return this._xAxisVisible.get();
       }
 
       /**
@@ -80462,13 +80248,7 @@
        * @type {Boolean}
        */
       set yAxisVisible(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultAxisVisible;
-          this._yAxisVisible = value;
-          const axisVisible = this._visible && this._axisVisible && this._yAxisVisible && this._axisEnabled;
-          this._yAxisWire.setVisible(axisVisible);
-          this._yAxisLabel.setVisible(axisVisible && !this._yAxisLabelCulled && this._yLabelEnabled);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._yAxisVisible.set(value);
       }
 
       /**
@@ -80479,7 +80259,7 @@
        * @type {Boolean}
        */
       get yAxisVisible() {
-          return this._yAxisVisible;
+          return this._yAxisVisible.get();
       }
 
       /**
@@ -80490,13 +80270,7 @@
        * @type {Boolean}
        */
       set zAxisVisible(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultAxisVisible;
-          this._zAxisVisible = value;
-          const axisVisible = this._visible && this._axisVisible && this._zAxisVisible && this._axisEnabled;
-          this._zAxisWire.setVisible(axisVisible);
-          this._zAxisLabel.setVisible(axisVisible && !this._zAxisLabelCulled && this._zLabelEnabled);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._zAxisVisible.set(value);
       }
 
       /**
@@ -80507,7 +80281,7 @@
        * @type {Boolean}
        */
       get zAxisVisible() {
-          return this._zAxisVisible;
+          return this._zAxisVisible.get();
       }
 
       /**
@@ -80516,11 +80290,7 @@
        * @type {Boolean}
        */
       set wireVisible(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultWireVisible;
-          this._wireVisible = value;
-          var wireVisible = this._visible && this._wireVisible;
-          this._lengthLabel.setVisible(wireVisible && this._lengthLabelEnabled);
-          this._lengthWire.setVisible(wireVisible);
+          this._wireVisible.set(value);
       }
 
       /**
@@ -80529,7 +80299,7 @@
        * @type {Boolean}
        */
       get wireVisible() {
-          return this._wireVisible;
+          return this._wireVisible.get();
       }
 
       /**
@@ -80538,15 +80308,7 @@
        * @type {Boolean}
        */
       set labelsVisible(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultLabelsVisible;
-          this._labelsVisible = value;
-          var labelsVisible = this._visible && this._labelsVisible;
-          this._xAxisLabel.setVisible(labelsVisible && !this._xAxisLabelCulled && this._clickable && this._axisEnabled && this._xLabelEnabled);
-          this._yAxisLabel.setVisible(labelsVisible && !this._yAxisLabelCulled && this._clickable && this._axisEnabled && this._yLabelEnabled);
-          this._zAxisLabel.setVisible(labelsVisible && !this._zAxisLabelCulled && this._clickable && this._axisEnabled && this._zLabelEnabled);
-          this._lengthLabel.setVisible(labelsVisible && this._lengthLabelEnabled);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._labelsVisible.set(value);
       }
 
       /**
@@ -80555,7 +80317,7 @@
        * @type {Boolean}
        */
       get labelsVisible() {
-          return this._labelsVisible;
+          return this._labelsVisible.get();
       }
 
       /**
@@ -80564,12 +80326,7 @@
        * @type {Boolean}
        */
       set xLabelEnabled(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultXLabelEnabled;
-          this._xLabelEnabled = value;
-          var labelsVisible = this._visible && this._labelsVisible;
-          this._xAxisLabel.setVisible(labelsVisible && !this._xAxisLabelCulled && this._clickable && this._axisEnabled && this._xLabelEnabled);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._xLabelEnabled.set(value);
       }
 
       /**
@@ -80578,7 +80335,7 @@
        * @type {Boolean}
        */
       get xLabelEnabled(){
-          return this._xLabelEnabled;
+          return this._xLabelEnabled.get();
       }
 
       /**
@@ -80587,12 +80344,7 @@
        * @type {Boolean}
        */
       set yLabelEnabled(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultYLabelEnabled;
-          this._yLabelEnabled = value;
-          var labelsVisible = this._visible && this._labelsVisible;
-          this._yAxisLabel.setVisible(labelsVisible && !this._yAxisLabelCulled && this._clickable && this._axisEnabled && this._yLabelEnabled);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._yLabelEnabled.set(value);
       }
 
       /**
@@ -80601,7 +80353,7 @@
        * @type {Boolean}
        */
       get yLabelEnabled(){
-          return this._yLabelEnabled;
+          return this._yLabelEnabled.get();
       }
 
       /**
@@ -80610,12 +80362,7 @@
        * @type {Boolean}
        */
       set zLabelEnabled(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultZLabelEnabled;
-          this._zLabelEnabled = value;
-          var labelsVisible = this._visible && this._labelsVisible;
-          this._zAxisLabel.setVisible(labelsVisible && !this._zAxisLabelCulled && this._clickable && this._axisEnabled && this._zLabelEnabled);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._zLabelEnabled.set(value);
       }
 
       /**
@@ -80624,7 +80371,7 @@
        * @type {Boolean}
        */
       get zLabelEnabled(){
-          return this._zLabelEnabled;
+          return this._zLabelEnabled.get();
       }
 
       /**
@@ -80633,12 +80380,7 @@
        * @type {Boolean}
        */
       set lengthLabelEnabled(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultLengthLabelEnabled;
-          this._lengthLabelEnabled = value;
-          var labelsVisible = this._visible && this._labelsVisible;
-          this._lengthLabel.setVisible(labelsVisible && !this._lengthAxisLabelCulled && this._clickable && this._axisEnabled && this._lengthLabelEnabled);
-          this._cpDirty = true;
-          this._needUpdate();
+          this._lengthLabelEnabled.set(value);
       }
 
       /**
@@ -80647,7 +80389,7 @@
        * @type {Boolean}
        */
       get lengthLabelEnabled(){
-          return this._lengthLabelEnabled;
+          return this._lengthLabelEnabled.get();
       }
 
       /**
@@ -80656,8 +80398,8 @@
        * @type {Boolean}
        */
       set labelsOnWires(value) {
-          value = value !== undefined ? Boolean(value) : this.plugin.defaultLabelsOnWires;
-          this._labelsOnWires = value;
+          this._labelsOnWires.set(value);
+          this._update();
       }
 
       /**
@@ -80666,7 +80408,7 @@
        * @type {Boolean}
        */
       get labelsOnWires() {
-          return this._labelsOnWires;
+          return this._labelsOnWires.get();
       }
 
       /**
@@ -80674,16 +80416,7 @@
        * @param highlighted
        */
       setHighlighted(highlighted) {
-          this._originDot.setHighlighted(highlighted);
-          this._targetDot.setHighlighted(highlighted);
-          this._xAxisWire.setHighlighted(highlighted);
-          this._yAxisWire.setHighlighted(highlighted);
-          this._zAxisWire.setHighlighted(highlighted);
-          this._xAxisLabel.setHighlighted(highlighted);
-          this._yAxisLabel.setHighlighted(highlighted);
-          this._zAxisLabel.setHighlighted(highlighted);
-          this._lengthWire.setHighlighted(highlighted);
-          this._lengthLabel.setHighlighted(highlighted);
+          this._drawables.forEach(d => d.setHighlighted(highlighted));
       }
 
       /**
@@ -80692,18 +80425,8 @@
        * @type {Boolean}
        */
       set clickable(value) {
-          value = !!value;
-          this._clickable = value;
-          this._originDot.setClickable(this._clickable);
-          this._targetDot.setClickable(this._clickable);
-          this._xAxisWire.setClickable(this._clickable);
-          this._yAxisWire.setClickable(this._clickable);
-          this._zAxisWire.setClickable(this._clickable);
-          this._lengthWire.setClickable(this._clickable);
-          this._xAxisLabel.setClickable(this._clickable);
-          this._yAxisLabel.setClickable(this._clickable);
-          this._zAxisLabel.setClickable(this._clickable);
-          this._lengthLabel.setClickable(this._clickable);
+          this._clickable.set(!!value);
+          this._drawables.forEach(d => d.setClickable(this._clickable.get()));
       }
 
       /**
@@ -80712,50 +80435,14 @@
        * @type {Boolean}
        */
       get clickable() {
-          return this._clickable;
+          return this._clickable.get();
       }
 
       /**
        * @private
        */
       destroy() {
-
-          const scene = this.plugin.viewer.scene;
-          const metrics = scene.metrics;
-
-          if (this._onViewMatrix) {
-              scene.camera.off(this._onViewMatrix);
-          }
-          if (this._onProjMatrix) {
-              scene.camera.off(this._onProjMatrix);
-          }
-          if (this._onCanvasBoundary) {
-              scene.canvas.off(this._onCanvasBoundary);
-          }
-          if (this._onMetricsUnits) {
-              metrics.off(this._onMetricsUnits);
-          }
-          if (this._onMetricsScale) {
-              metrics.off(this._onMetricsScale);
-          }
-          if (this._onMetricsOrigin) {
-              metrics.off(this._onMetricsOrigin);
-          }
-          if (this._onSectionPlaneUpdated) {
-              scene.off(this._onSectionPlaneUpdated);
-          }
-
-          this._originDot.destroy();
-          this._targetDot.destroy();
-          this._xAxisWire.destroy();
-          this._yAxisWire.destroy();
-          this._zAxisWire.destroy();
-          this._lengthLabel.destroy();
-          this._xAxisLabel.destroy();
-          this._yAxisLabel.destroy();
-          this._zAxisLabel.destroy();
-          this._lengthWire.destroy();
-
+          this._cleanups.forEach(cleanup => cleanup());
           super.destroy();
       }
   }
@@ -81947,7 +81634,7 @@
           this._hideEdges = cfg.hideEdges !== false;
           this._hideTransparentObjects = !!cfg.hideTransparentObjects;
           this._scaleCanvasResolution = !!cfg.scaleCanvasResolution;
-          this._defaultScaleCanvasResolutionFactor = cfg.defaultScaleCanvasResolutionFactor || 1.0;
+          this._defaultScaleCanvasResolutionFactor = cfg.defaultScaleCanvasResolutionFactor;
           this._scaleCanvasResolutionFactor = cfg.scaleCanvasResolutionFactor || 0.6;
           this._delayBeforeRestore = (cfg.delayBeforeRestore !== false);
           this._delayBeforeRestoreSeconds = cfg.delayBeforeRestoreSeconds || 0.5;
@@ -81963,6 +81650,7 @@
                   viewer.scene._renderer.setSAOEnabled(!this._hideSAO);
                   viewer.scene._renderer.setTransparentEnabled(!this._hideTransparentObjects);
                   viewer.scene._renderer.setEdgesEnabled(!this._hideEdges);
+                  this._originalCanvasResolutionScale = viewer.scene.canvas.resolutionScale;
                   if (this._scaleCanvasResolution) {
                       viewer.scene.canvas.resolutionScale = this._scaleCanvasResolutionFactor;
                   } else {
@@ -81973,7 +81661,7 @@
           };
 
           const switchToHighQuality = () => {
-              viewer.scene.canvas.resolutionScale = this._defaultScaleCanvasResolutionFactor;
+              viewer.scene.canvas.resolutionScale = this._defaultScaleCanvasResolutionFactor || this._originalCanvasResolutionScale || 1.0;
               viewer.scene._renderer.setEdgesEnabled(true);
               viewer.scene._renderer.setColorTextureEnabled(true);
               viewer.scene._renderer.setPBREnabled(true);
@@ -82178,7 +81866,7 @@
        * @param {Number} defaultScaleCanvasResolutionFactor Factor by scale canvas resolution when we stop interacting with the viewer.
        */
       set defaultScaleCanvasResolutionFactor(defaultScaleCanvasResolutionFactor) {
-          this._defaultScaleCanvasResolutionFactor = defaultScaleCanvasResolutionFactor || 1.0;
+          this._defaultScaleCanvasResolutionFactor = defaultScaleCanvasResolutionFactor;
       }
 
       /**
@@ -84785,6 +84473,7 @@
           this._scene = scene;
 
           const pickController = controllers.pickController;
+          const cameraControl = controllers.cameraControl;
 
           let lastX = 0;
           let lastY = 0;
@@ -84821,7 +84510,6 @@
           });
 
           function setMousedownState(pick = true) {
-              canvas.style.cursor = "move";
               setMousedownPositions();
               if (pick) {
                   setMousedownPick();
@@ -84849,6 +84537,15 @@
               }
           }
 
+          function isPanning() {
+              return configs.planView || cameraControl._isKeyDownForAction(cameraControl.MOUSE_PAN, keyDown);
+          }
+
+          function isRotating() {
+              return cameraControl._isKeyDownForAction(cameraControl.MOUSE_ROTATE, keyDown);
+          }
+
+
           canvas.addEventListener("mousedown", this._mouseDownHandler = (e) => {
 
               if (!(configs.active && configs.pointerEnabled)) {
@@ -84862,12 +84559,14 @@
                       if (keyDown[scene.input.KEY_SHIFT] || configs.planView) {
 
                           mouseDownLeft = true;
+                          keyDown[scene.input.MOUSE_LEFT_BUTTON] = true;
 
                           setMousedownState();
 
                       } else {
 
                           mouseDownLeft = true;
+                          keyDown[scene.input.MOUSE_LEFT_BUTTON] = true;
 
                           setMousedownState(false);
                       }
@@ -84877,6 +84576,7 @@
                   case 2: // Middle/both buttons
 
                       mouseDownMiddle = true;
+                      keyDown[scene.input.MOUSE_MIDDLE_BUTTON] = true;
 
                       setMousedownState();
 
@@ -84885,6 +84585,7 @@
                   case 3: // Right button
 
                       mouseDownRight = true;
+                      keyDown[scene.input.MOUSE_RIGHT_BUTTON] = true;
 
                       if (configs.panRightClick) {
 
@@ -84914,7 +84615,8 @@
               const x = states.pointerCanvasPos[0];
               const y = states.pointerCanvasPos[1];
 
-              const panning = keyDown[scene.input.KEY_SHIFT] || configs.planView || (!configs.panRightClick && mouseDownMiddle) || (configs.panRightClick && mouseDownRight);
+              const panning = isPanning();
+              const rotating = isRotating();
 
               const xDelta = document.pointerLockElement ? e.movementX : (x - lastX);
               const yDelta = document.pointerLockElement ? e.movementY : (y - lastY);
@@ -84939,7 +84641,7 @@
                       updates.panDeltaY += 0.5 * camera.ortho.scale * (yDelta / canvasHeight);
                   }
 
-              } else if (mouseDownLeft && !mouseDownMiddle && !mouseDownRight) {
+              } else if (rotating) {
 
                   if (!configs.planView) { // No rotating in plan-view mode
 
@@ -84980,16 +84682,25 @@
                       mouseDownLeft = false;
                       mouseDownMiddle = false;
                       mouseDownRight = false;
+                      keyDown[scene.input.MOUSE_LEFT_BUTTON] = false;
+                      keyDown[scene.input.MOUSE_MIDDLE_BUTTON] = false;
+                      keyDown[scene.input.MOUSE_RIGHT_BUTTON] = false;
                       break;
                   case 2: // Middle/both buttons
                       mouseDownLeft = false;
                       mouseDownMiddle = false;
                       mouseDownRight = false;
+                      keyDown[scene.input.MOUSE_LEFT_BUTTON] = false;
+                      keyDown[scene.input.MOUSE_MIDDLE_BUTTON] = false;
+                      keyDown[scene.input.MOUSE_RIGHT_BUTTON] = false;
                       break;
                   case 3: // Right button
                       mouseDownLeft = false;
                       mouseDownMiddle = false;
                       mouseDownRight = false;
+                      keyDown[scene.input.MOUSE_LEFT_BUTTON] = false;
+                      keyDown[scene.input.MOUSE_MIDDLE_BUTTON] = false;
+                      keyDown[scene.input.MOUSE_RIGHT_BUTTON] = false;
                       break;
               }
           });
@@ -85027,7 +84738,7 @@
           let secsNowLast = null;
 
           canvas.addEventListener("wheel", this._mouseWheelHandler = (e) => {
-              if (!(configs.active && configs.pointerEnabled && configs.zoomOnMouseWheel)) {
+              if (!(configs.active && configs.pointerEnabled && configs.zoomOnMouseWheel && cameraControl._isKeyDownForAction(cameraControl.MOUSE_DOLLY, keyDown))) {
                   return;
               }
               const secsNow = performance.now() / 1000.0;
@@ -85208,6 +84919,7 @@
           this._clicks = 0;
           this._timeout = null;
           this._lastPickedEntityId = null;
+          this._lastClickedWorldPos = null;
 
           let leftDown = false;
           let rightDown = false;
@@ -85357,11 +85069,16 @@
                       if (pickResult && pickResult.worldPos) {
                           pivotController.setPivotPos(pickResult.worldPos);
                           pivotController.startPivot();
+                          this._lastClickedWorldPos = pickResult.worldPos.slice();
                       } else {
                           if (configs.smartPivot) {
                               pivotController.setCanvasPivotPos(states.pointerCanvasPos);
                           } else {
-                              pivotController.setPivotPos(scene.camera.look);
+                              if (this._lastClickedWorldPos) {
+                                  pivotController.setPivotPos(this._lastClickedWorldPos);
+                              } else {
+                                  pivotController.setPivotPos(scene.camera.look);
+                              }
                           }
                           pivotController.startPivot();
                       }
@@ -85458,7 +85175,7 @@
 
                   this._timeout = setTimeout(() => {
 
-                      if (firstClickPickResult && firstClickPickResult.worldPos) {
+                      if (firstClickPickResult) {
 
                           cameraControl.fire("picked", firstClickPickResult, true);
 
@@ -85583,7 +85300,7 @@
 
           const keyDownMap = [];
 
-          const canvas = scene.canvas.canvas;
+          scene.canvas.canvas;
 
           let mouseMovedSinceLastKeyboardDolly = true;
 
@@ -85599,10 +85316,6 @@
                   return;
               }
               keyDownMap[keyCode] = true;
-
-              if (keyCode === input.KEY_SHIFT) {
-                  canvas.style.cursor = "move";
-              }
           });
 
           this._onSceneKeyUp = input.on("keyup", (keyCode) => {
@@ -85610,10 +85323,6 @@
                   return;
               }
               keyDownMap[keyCode] = false;
-
-              if (keyCode === input.KEY_SHIFT) {
-                  canvas.style.cursor = null;
-              }
 
               if (controllers.pivotController.getPivoting()) {
                   controllers.pivotController.endPivot();
@@ -85771,6 +85480,7 @@
           const pickController = controllers.pickController;
           const pivotController = controllers.pivotController;
           const panController = controllers.panController;
+          const cameraControl = controllers.cameraControl;
 
           let countDown = SCALE_DOLLY_EACH_FRAME; // Decrements on each tick
           let dollyDistFactor = 1.0; // Calculated when countDown is zero
@@ -85895,7 +85605,7 @@
                   updates.rotateDeltaX *= configs.rotationInertia;
                   updates.rotateDeltaY *= configs.rotationInertia;
 
-                  cursorType = "grabbing";
+                  cursorType = cameraControl._cursors.rotate;
               }
 
               //----------------------------------------------------------------------------------------------------------
@@ -85961,7 +85671,7 @@
                       camera.pan(vec);
                   }
 
-                  cursorType = "grabbing";
+                  cursorType = cameraControl._cursors.pan;
               }
 
               updates.panDeltaX *= configs.panInertia;
@@ -85975,9 +85685,9 @@
               if (dollyDeltaForDist !== 0) {
 
                   if (dollyDeltaForDist < 0) {
-                      cursorType = "zoom-in";
+                      cursorType = cameraControl._cursors.dollyForward;
                   } else {
-                      cursorType = "zoom-out";
+                      cursorType = cameraControl._cursors.dollyBackward;
                   }
 
                   if (configs.firstPerson) {
@@ -86243,6 +85953,7 @@
           canvas.addEventListener("touchend", this._canvasTouchEndHandler = () => {
               if (pivotController.getPivoting()) {
                   pivotController.endPivot();
+                  pivotController.hidePivot();
               }
           });
 
@@ -87077,6 +86788,12 @@
    * keyMap[cameraControl.AXIS_VIEW_FRONT] = [input.KEY_NUM_4];
    * keyMap[cameraControl.AXIS_VIEW_TOP] = [input.KEY_NUM_5];
    * keyMap[cameraControl.AXIS_VIEW_BOTTOM] = [input.KEY_NUM_6];
+   * keyMap[cameraControl.MOUSE_PAN] = [[input.KEY_SHIFT, input.MOUSE_LEFT_BUTTON]];
+   * keyMap[cameraControl.MOUSE_ROTATE] = [
+   *     [input.KEY_SHIFT, input.MOUSE_MIDDLE_BUTTON],
+   *     [input.KEY_SHIFT, input.MOUSE_RIGHT_BUTTON]
+   * ]
+   * keyMap[cameraControl.MOUSE_DOLLY] = [[input.KEY_CTRL, input.MOUSE_RIGHT_BUTTON]];
    *
    * cameraControl.keyMap = keyMap;
    * ````
@@ -87095,6 +86812,70 @@
    *
    * * ````"qwerty"````
    * * ````"azerty"````
+   * 
+   * ## Basic Keyboard Mapping
+   * * ````"OR" Relation````
+   * Set multiple keys to trigger an action if any one is pressed:
+   * 
+   * ````javascript
+   * keyMap[cameraControl.DOLLY_BACKWARDS] = [input.KEY_S, input.KEY_SUBTRACT];
+   * ````
+   * 
+   * If either ````KEY_S```` or ````KEY_SUBTRACT```` is pressed, the camera will dolly backward.
+   * 
+   * * ````"AND" Relation````
+   * To require all keys in a combination to be pressed:
+   * 
+   * ````javascript
+   * keyMap[cameraControl.DOLLY_BACKWARDS] = [[input.KEY_S, input.KEY_SUBTRACT]];
+   * ````
+   * 
+   * The camera will dolly backward if ````both KEY_S```` and ````KEY_SUBTRACT```` are pressed.
+   * 
+   * * ````Mix "AND" and "OR" Relation````
+   * Use a combination of keys and groups for flexibility:
+   * 
+   * ````javascript
+   * keyMap[cameraControl.DOLLY_BACKWARDS] = [
+   *     [input.KEY_S, input.KEY_SUBTRACT],  // 'And' group
+   *     input.KEY_SHIFT                      // 'Or' with previous
+   * ];
+   * ````
+   * 
+   * The camera will dolly backward if ````KEY_S```` + ````KEY_SUBTRACT```` are pressed together, or if ````KEY_SHIFT```` is pressed.
+   * 
+   * ## Special Mouse Actions
+   * Certain actions support combinations with specific mouse buttons or events:
+   * 
+   * * ````MOUSE_PAN````
+   * For panning with a key and mouse movement:
+   * 
+   * ````javascript
+   * keyMap[cameraControl.MOUSE_PAN] = [[input.KEY_SHIFT, input.MOUSE_LEFT_BUTTON]];
+   * ````
+   * 
+   * Panning is triggered by pressing ````KEY_SHIFT```` + ````MOUSE_LEFT_BUTTON```` while moving the mouse.
+   * 
+   * * ````MOUSE_ROTATE````
+   * Similar to panning, rotation can be configured with key and mouse button combinations:
+   * 
+   * ````javascript
+   * keyMap[cameraControl.MOUSE_ROTATE] = [[input.KEY_CTRL, input.MOUSE_LEFT_BUTTON]];
+   * ````
+   * 
+   * Rotation is triggered by pressing ````KEY_CTRL```` + ````MOUSE_LEFT_BUTTON```` during mouse movement.
+   * 
+   * * ````MOUSE_DOLLY````
+   * Dolly with mouse wheel scrolling and optional key combinations:
+   * 
+   * ````javascript
+   * keyMap[cameraControl.MOUSE_DOLLY] = [[input.KEY_ALT]];
+   * ````
+   * 
+   * Dolly action occurs when scrolling the mouse wheel with ````KEY_ALT```` held (no need to specify MOUSE_WHEEL).
+   * 
+   * ## Special Mouse Actions
+   * Use ````input.MOUSE_LEFT_BUTTON````, ````input.MOUSE_MIDDLE_BUTTON````, and ````input.MOUSE_RIGHT_BUTTON```` in combinations only for camera movements involving the mouse.
    */
   class CameraControl extends Component {
 
@@ -87232,6 +87013,27 @@
            */
           this.AXIS_VIEW_BOTTOM = 17;
 
+          /**
+           * Identifies the XX action.
+           * @final
+           * @type {Number}
+           */
+          this.MOUSE_PAN = 18;
+
+          /**
+           * Identifies the XX action.
+           * @final
+           * @type {Number}
+           */
+          this.MOUSE_ROTATE = 19;
+
+          /**
+           * Identifies the XX action.
+           * @final
+           * @type {Number}
+           */
+          this.MOUSE_DOLLY = 20;
+
           this._keyMap = {}; // Maps key codes to the above actions
 
           this.scene.canvas.canvas.oncontextmenu = (e) => {
@@ -87347,6 +87149,13 @@
               new KeyboardPanRotateDollyHandler(this.scene, this._controllers, this._configs, this._states, this._updates)
           ];
 
+          this._cursors = {
+              dollyForward: "zoom-in",
+              dollyBackward: "zoom-out",
+              rotate: 'grabbing',
+              pan: 'move',
+          };
+
           // Applies scheduled updates to the Camera on each Scene "tick" event
 
           this._cameraUpdater = new CameraUpdater(this.scene, this._controllers, this._configs, this._states, this._updates);
@@ -87420,6 +87229,12 @@
                       keyMap[this.AXIS_VIEW_FRONT] = [input.KEY_NUM_4];
                       keyMap[this.AXIS_VIEW_TOP] = [input.KEY_NUM_5];
                       keyMap[this.AXIS_VIEW_BOTTOM] = [input.KEY_NUM_6];
+                      keyMap[this.MOUSE_PAN] = [
+                          [input.MOUSE_LEFT_BUTTON, input.KEY_SHIFT],
+                          this._configs.panRightClick ? input.MOUSE_RIGHT_BUTTON : input.MOUSE_MIDDLE_BUTTON
+                      ];
+                      keyMap[this.MOUSE_ROTATE] = [input.MOUSE_LEFT_BUTTON];
+                      keyMap[this.MOUSE_DOLLY] = [];
                       break;
 
                   case "azerty":
@@ -87441,6 +87256,12 @@
                       keyMap[this.AXIS_VIEW_FRONT] = [input.KEY_NUM_4];
                       keyMap[this.AXIS_VIEW_TOP] = [input.KEY_NUM_5];
                       keyMap[this.AXIS_VIEW_BOTTOM] = [input.KEY_NUM_6];
+                      keyMap[this.MOUSE_PAN] = [
+                          [input.MOUSE_LEFT_BUTTON, input.KEY_SHIFT],
+                          this._configs.panRightClick ? input.MOUSE_RIGHT_BUTTON : input.MOUSE_MIDDLE_BUTTON
+                      ];
+                      keyMap[this.MOUSE_ROTATE] = [input.MOUSE_LEFT_BUTTON];
+                      keyMap[this.MOUSE_DOLLY] = [];
                       break;
               }
 
@@ -87460,6 +87281,44 @@
           return this._keyMap;
       }
 
+      _areAllKeysDown(keyDownMap, keys) {
+          if (!keys || keys.length <= 0) {
+              return true;
+          }
+          if (!keyDownMap) {
+              return false;
+          }
+          for (let i = 0, len = keys.length; i < len; i++) {
+              const key = keys[i];
+              if (!keyDownMap[key])
+                  return false;
+          }
+          return true;
+      }
+
+      _isAnyOtherKeyDown(keyDownMap, keyMap) {
+          for (let i = 0, len = keyDownMap.length; i < len; i++) {
+              if (keyDownMap[i]) {
+                  if (Array.isArray(keyMap)) {
+                      if (keyMap.indexOf(i) < 0) return true;
+                  }
+                  else if (i !== keyMap) return true;
+              }
+          }
+          return false;
+      }
+
+      _isMouseAction(action) {
+          switch (action) {
+              case this.MOUSE_ROTATE:
+              case this.MOUSE_DOLLY:
+              case this.MOUSE_PAN:
+                  return true;
+              default:
+                  return false;
+          }
+      }
+
       /**
        * Returns true if any keys configured for the given action are down.
        * @param action
@@ -87471,14 +87330,21 @@
           if (!keys) {
               return false;
           }
+          if (keys.length === 0 && this._isMouseAction(action)) return true;
           if (!keyDownMap) {
               keyDownMap = this.scene.input.keyDown;
           }
           for (let i = 0, len = keys.length; i < len; i++) {
               const key = keys[i];
-              if (keyDownMap[key]) {
-                  return true;
+              if (!Array.isArray(key)) {
+                  if (keyDownMap[key] && !this._isAnyOtherKeyDown(keyDownMap, key))
+                      return true;
               }
+              else {
+                  if (this._areAllKeysDown(keyDownMap, key) && !this._isAnyOtherKeyDown(keyDownMap, key))
+                      return true;
+              }
+
           }
           return false;
       }
@@ -87649,6 +87515,37 @@
       set pointerEnabled(value) {
           this._reset();
           this._configs.pointerEnabled = !!value;
+      }
+
+      /**
+       * Sets the cursor to be used when a particular action is being performed.
+       *
+       * Accepted actions are:
+       * 
+       * * "dollyForward" - when the camera is dollying in the forward direction
+       * * "dollyBackward" - when the camera is dollying in the backward direction
+       * * "pan" - when the camera is being panned
+       * * "rotate" - when the camera is being rotated
+       *
+       * @param {String} action
+       * @param {String} style
+       */
+      setCursorStyle(action, style) {
+          if (Object.prototype.hasOwnProperty.call(this._cursors, action)) {
+              this._cursors = { ...this._cursors, [action]: style };
+          }
+          else
+              console.warn(`Action '${action}' is not valid for cursor styles.`);
+      }
+
+      /**
+       * Gets the current style for a particular action.
+       *
+       * @param {String} action To get the style for
+       * @returns {String} style set on the cursor for action
+       */
+      getCursorStyle(action) {
+          return this._cursors[action] || null;
       }
 
       _reset() {
@@ -87914,6 +87811,16 @@
        */
       set panRightClick(value) {
           this._configs.panRightClick = value !== false;
+          const panKeyMap = this._keyMap[this.MOUSE_PAN];
+          if (panKeyMap && panKeyMap.length > 0) {
+              const input = this.scene.input;
+              for (let i = 0, len = panKeyMap.length; i < len; i++) {
+                  if (this._configs.panRightClick && panKeyMap[i] === input.MOUSE_MIDDLE_BUTTON) 
+                      this._keyMap[this.MOUSE_PAN][i] = input.MOUSE_RIGHT_BUTTON;
+                  else if (!this._configs.panRightClick && panKeyMap[i] === input.MOUSE_RIGHT_BUTTON)
+                      this._keyMap[this.MOUSE_PAN][i] = input.MOUSE_MIDDLE_BUTTON;
+              }
+          }
       }
 
       /**
@@ -88983,11 +88890,12 @@
                       this.metaScene.metaObjects[id] = metaObject;
                       metaObject.metaModels = [];
                   }
-                  this.metaObjects[id] =metaObject;
+                  this.metaObjects[id] = metaObject;
                   if (!metaObjectData.parent) {
                       this.rootMetaObjects.push(metaObject);
                       metaScene.rootMetaObjects[id] = metaObject;
                   }
+                  metaObject.metaModels.push(this);
               }
           }
       }
@@ -89391,15 +89299,15 @@
           // Remove MetaObjects
 
           if (metaModel.metaObjects) {
-              for (let i = 0, len = metaModel.metaObjects.length; i < len; i++) {
-                  const metaObject = metaModel.metaObjects[i];
-                  metaObject.type;
-                  const id = metaObject.id;
-                  if (metaObject.metaModels.length === 1&& metaObject.metaModels[0].id === metaModelId) { // MetaObject owned only by this model, delete
-                      delete this.metaObjects[id];
+              for (let objectId in metaModel.metaObjects) {
+                  const metaObject = metaModel.metaObjects[objectId];
+                  if (metaObject.metaModels.length === 1 && metaObject.metaModels[0].id === metaModelId) { // MetaObject owned only by this model, delete
+                      delete this.metaObjects[objectId];
                       if (!metaObject.parent) {
-                          delete this.rootMetaObjects[id];
+                          delete this.rootMetaObjects[objectId];
                       }
+                  } else {
+                      metaObject.metaModels = metaObject.metaModels.filter(metaModel => metaModel.id !== metaModelId);
                   }
               }
           }
@@ -89459,8 +89367,8 @@
 
           for (let modelId in this.metaModels) {
               const metaModel = this.metaModels[modelId];
-              for (let i = 0, len = metaModel.metaObjects.length; i < len; i++) {
-                  const metaObject = metaModel.metaObjects[i];
+              for (let objectId in metaModel.metaObjects) {
+                  const metaObject = metaModel.metaObjects[objectId];
                   metaObject.metaModels.push(metaModel);
               }
           }
@@ -97846,22 +97754,27 @@
               }
           }
 
+          // Added to fix label's text offset in an html2canvas capture (See XEOK-151)
+          // based on https://github.com/niklasvh/html2canvas/issues/2775#issuecomment-1316356991
+          const style = document.createElement('style');
+          document.head.appendChild(style);
+          style.sheet?.insertRule('body > div:last-child img { display: inline-block; }');
+
           for (let i = 0, len = pluginContainerElements.length; i < len; i++) {
               const containerElement = pluginContainerElements[i];
-              //only calculate the scale for first plugin
-              //for all others keep the scale 1 otherwise it will keep multiplying the scale with the base scale of canvas
-              //resulting in increase/decreased size for the the canvas that is being overlapped
-              const scale = i == 0 ? snapshotCanvas.width / containerElement.clientWidth : 1;
-              const off = math.vec2([ 0, 0 ]);
-              transformToNode(canvas, containerElement, off);
               await html2canvas(containerElement, {
                   canvas: snapshotCanvas,
                   backgroundColor: null,
-                  x: off[0],
-                  y: off[1],
-                  scale
+                  scale: snapshotCanvas.width / containerElement.clientWidth
               });
+              // Reverts translation and scaling applied to the snapshotCanvas's context
+              // by the html2canvas call (inside the ForeignObjectRenderer's constructor)
+              // (implemented to compensate XCD-153 issue)
+              snapshotCanvas.getContext("2d").resetTransform();
           }
+
+          style.remove();
+
           if (!params.includeGizmos) {
               this.sendToPlugins("snapshotFinished");
           }
@@ -102999,7 +102912,7 @@
       nodeElement.appendChild(span);
 
       if (contextmenuHandler) {
-        span.oncontextmenu = contextmenuHandler;
+        addContextMenuListener(span, contextmenuHandler);
       }
 
       if (titleClickHandler) {
@@ -103485,6 +103398,7 @@
        * @param {Boolean} [cfg.pruneEmptyNodes=true] When true, will not contain nodes that don't have content in the {@link Scene}. These are nodes whose {@link MetaObject}s don't have {@link Entity}s.
        * @param {RenderService} [cfg.renderService] Optional {@link RenderService} to use. Defaults to the {@link TreeViewPlugin}'s default {@link RenderService}.
        * @param {Boolean} [cfg.showIndeterminate=false] When true, will show indeterminate state for checkboxes when some but not all child nodes are checked
+       * @param {Boolean} [cfg.showProjectNode=false] When true, will show top level project node when hierarchy is set to "storeys"
        */
       constructor(viewer, cfg = {}) {
 
@@ -103537,6 +103451,7 @@
           this._showListItemElementId = null;
           this._renderService = cfg.renderService || new RenderService();
           this._showIndeterminate = cfg.showIndeterminate ?? false;
+          this._showProjectNode = cfg.showProjectNode ?? false;
 
           if (!this._renderService) {
               throw new Error('TreeViewPlugin: no render service set');
@@ -104091,11 +104006,11 @@
       _createStoreysNodes() {
           const rootMetaObjects = this._viewer.metaScene.rootMetaObjects;
           for (let id in rootMetaObjects) {
-              this._createStoreysNodes2(rootMetaObjects[id], null, null, null);
+              this._createStoreysNodes2(rootMetaObjects[id], null, null, null, null);
           }
       }
 
-      _createStoreysNodes2(metaObject, buildingNode, storeyNode, typeNodes) {
+      _createStoreysNodes2(metaObject, projectNode, buildingNode, storeyNode, typeNodes) {
           if (this._pruneEmptyNodes && (metaObject._countEntities === 0)) {
               return;
           }
@@ -104103,10 +104018,11 @@
           const metaObjectName = metaObject.name;
           const children = metaObject.children;
           const objectId = metaObject.id;
-          if (metaObjectType === "IfcBuilding") {
-              buildingNode = {
+
+          if (this._showProjectNode && metaObjectType === 'IfcProject') {
+              projectNode = {
                   nodeId: `${this._id}-${objectId}`,
-                  objectId: objectId,
+                  objectId,
                   title: (metaObject.metaModels.length === 0) ? metaObjectName : this._rootNames[metaObject.metaModels[0].id] || ((metaObjectName && metaObjectName !== "" && metaObjectName !== "Undefined" && metaObjectName !== "Default") ? metaObjectName : metaObjectType),
                   type: metaObjectType,
                   parent: null,
@@ -104114,9 +104030,29 @@
                   numVisibleEntities: 0,
                   checked: false,
                   xrayed: false,
+                  children: [],
+              };
+              this._rootNodes.push(projectNode);
+              this._objectNodes[projectNode.objectId] = projectNode;
+              this._nodeNodes[projectNode.nodeId] = projectNode;
+          } else if (metaObjectType === "IfcBuilding") {
+              buildingNode = {
+                  nodeId: `${this._id}-${objectId}`,
+                  objectId: objectId,
+                  title: (metaObject.metaModels.length === 0) ? metaObjectName : this._rootNames[metaObject.metaModels[0].id] || ((metaObjectName && metaObjectName !== "" && metaObjectName !== "Undefined" && metaObjectName !== "Default") ? metaObjectName : metaObjectType),
+                  type: metaObjectType,
+                  parent: projectNode,
+                  numEntities: 0,
+                  numVisibleEntities: 0,
+                  checked: false,
+                  xrayed: false,
                   children: []
               };
-              this._rootNodes.push(buildingNode);
+              if (projectNode) {
+                  projectNode.children.push(buildingNode);
+              } else {
+                  this._rootNodes.push(buildingNode);
+              }
               this._objectNodes[buildingNode.objectId] = buildingNode;
               this._nodeNodes[buildingNode.nodeId] = buildingNode;
           } else if (metaObjectType === "IfcBuildingStorey") {
@@ -104186,7 +104122,7 @@
           if (children) {
               for (let i = 0, len = children.length; i < len; i++) {
                   const childMetaObject = children[i];
-                  this._createStoreysNodes2(childMetaObject, buildingNode, storeyNode, typeNodes);
+                  this._createStoreysNodes2(childMetaObject, projectNode, buildingNode, storeyNode, typeNodes);
               }
           }
       }
@@ -104351,8 +104287,8 @@
 
               if (storey1MetaObject && (storey1MetaObject.attributes && storey1MetaObject.attributes.elevation !== undefined) &&
                   storey2MetaObject && (storey2MetaObject.attributes && storey2MetaObject.attributes.elevation !== undefined)) {
-                  const elevation1 = storey1MetaObject.attributes.elevation;
-                  const elevation2 = storey2MetaObject.attributes.elevation;
+                  const elevation1 = Number.parseFloat(storey1MetaObject.attributes.elevation);
+                  const elevation2 = Number.parseFloat(storey2MetaObject.attributes.elevation);
                   if (elevation1 > elevation2) {
                       return -1;
                   }
@@ -109211,7 +109147,7 @@
    *
    * ````javascript
    * const sceneModel = xktLoader.load({
-   *   manifestSrc: "https://xeokit.github.io/xeokit-sdk/assets/models/models/xkt/Schependomlaan.xkt",
+   *   src: "https://xeokit.github.io/xeokit-sdk/assets/models/models/xkt/Schependomlaan.xkt",
    *   id: "myModel",
    * });
    * ````
@@ -109949,6 +109885,10 @@
   }
 
   function getBaseDirectory(filePath) {
+      if (filePath.indexOf('?') > -1) {
+          filePath = filePath.split('?')[0];
+      }
+
       const pathArray = filePath.split('/');
       pathArray.pop(); // Remove the file name or the last segment of the path
       return pathArray.join('/') + '/';
@@ -111356,6 +111296,102 @@
       getSplitModelGeometry(projectId, modelId, geometryFileName, done, error) {
           const url = this._dataDir + "/projects/" + projectId + "/models/" + modelId + "/" + geometryFileName;
           utils.loadArraybuffer(url, done, error);
+      }
+  }
+
+  /**
+   * Default server client which loads content for a {@link BIMViewer} via HTTP from the file system.
+   *
+   * A BIMViewer is instantiated with an instance of this class.
+   *
+   * To load content from an alternative source, instantiate BIMViewer with your own custom implementation of this class.
+   */
+  class RestServer {
+
+      /**
+       * Constructs a Server.
+       *
+       * @param {*} [cfg] Server configuration.
+       * @param {String} [cfg.apiUrl] Base directory for content.
+       */
+      constructor(cfg = {}) {
+          this._apiUrl = cfg.apiUrl || "";
+      }
+
+      /**
+       * Gets information on all available projects.
+       *
+       * @param {Function} done Callback through which the JSON result is returned.
+       * @param {Function} error Callback through which an error message is returned on error.
+       */
+      getProjects(done, error) {
+          const url = this._apiUrl + "/projects";
+          utils.loadJSON(url, done, error);
+      }
+
+      /**
+       * Gets information for a project.
+       *
+       * @param {String} projectId ID of the project.
+       * @param {Function} done Callback through which the JSON result is returned.
+       * @param {Function} error Callback through which an error message is returned on error.
+       */
+      getProject(projectId, done, error) {
+          const url = this._apiUrl + "/projects/" + projectId;
+          utils.loadJSON(url, done, error);
+      }
+
+      /**
+       * Gets metadata for a model within a project.
+       *
+       * @param {String} projectId ID of the project.
+       * @param {String} modelId ID of the model.
+       * @param {Function} done Callback through which the JSON result is returned.
+       * @param {Function} error Callback through which an error message is returned on error.
+       */
+      getMetadata(projectId, modelId, done, error) {
+          const url = this._apiUrl + "/projects/" + projectId + "/models/" + modelId + "/metadata";
+          utils.loadJSON(url, done, error);
+      }
+
+      /**
+       * Gets geometry for a model within a project.
+       *
+       * @param {String} projectId ID of the project.
+       * @param {String} modelId ID of the model.
+       * @param {Function} done Callback through which the JSON result is returned.
+       * @param {Function} error Callback through which an error message is returned on error.
+       */
+      getGeometry(projectId, modelId, done, error) {
+          const url = this._apiUrl + "/projects/" + projectId + "/models/" + modelId + "/geometry";
+          utils.loadArraybuffer(url, done, error);
+      }
+
+      /**
+       * Gets metadata for an object within a model within a project.
+       *
+       * @param {String} projectId ID of the project.
+       * @param {String} modelId ID of the model.
+       * @param {String} objectId ID of the object.
+       * @param {Function} done Callback through which the JSON result is returned.
+       * @param {Function} error Callback through which an error message is returned on error.
+       */
+      getObjectInfo(projectId, modelId, objectId, done, error) {
+          const url = this._apiUrl + "/projects/" + projectId + "/models/" + modelId + "/props/" + objectId;
+          utils.loadJSON(url, done, error);
+      }
+
+      /**
+       * Gets existing issues for a model within a project.
+       *
+       * @param {String} projectId ID of the project.
+       * @param {String} modelId ID of the model.
+       * @param {Function} done Callback through which the JSON result is returned.
+       * @param {Function} error Callback through which an error message is returned on error.
+       */
+      getIssues(projectId, modelId, done, error) {
+          const url = this._apiUrl + "/projects/" + projectId + "/models/" + modelId + "/issues";
+          utils.loadJSON(url, done, error);
       }
   }
 
@@ -117780,9 +117816,694 @@
       }
   }
 
+  /**
+   * Locale translations for BIMViewer
+   */
+  const messages = {
+
+      // English
+
+      "en": {
+          "busyModal": { // The dialog that appears in the center of the canvas while we are loading a model
+              "loading": "Loading" // Loading <myModel>
+          },
+          "NavCube": { // The 3D navigation cube at the bottom right of the canvas
+              "front": "Front",
+              "back": "Back",
+              "top": "Top",
+              "bottom": "Bottom",
+              "left": "Left",
+              "right": "Right"
+          },
+          "modelsExplorer": { // The "Models" tab on the left of the canvas
+              "title": "Models",
+              "loadAll": "Load all",
+              "loadAllTip": "Load all models in this project",
+              "unloadAll": "Unload all",
+              "unloadAllTip": "Unload all models",
+              "add": "Add",
+              "addTip": "Add a Model"
+          },
+          "objectsExplorer": { // The "Objects" tab on the left of the canvas
+              "title": "Objects",
+              "showAll": "Show all",
+              "showAllTip": "Show all objects",
+              "hideAll": "Hide all",
+              "hideAllTip": "Hide all objects"
+          },
+          "classesExplorer": { // The "Classes" tab on the left of the canvas
+              "title": "Classes",
+              "showAll": "Show all",
+              "showAllTip": "Show all classes",
+              "hideAll": "Hide all",
+              "hideAllTip": "Hide all classes"
+          },
+          "storeysExplorer": { // The "Storeys" tab on the left of the canvas
+              "title": "Storeys",
+              "showAll": "Show all",
+              "showAllTip": "Show all storeys",
+              "hideAll": "Hide all",
+              "hideAllTip": "Hide all storeys"
+          },
+          "propertiesInspector": { // The "Properties" tab on the right of the canvas
+              "title": "Properties",
+              "noObjectSelectedWarning": "No object inspected. Right-click or long-tab an object and select \'Inspect Properties\' to view its properties here.",
+              "noPropSetWarning": "No property sets found for this object."
+          },
+          "toolbar": { // The toolbar at the top of the canvas
+              "toggleExplorer": "Toggle explorer", // Button to open or close the explorer panel on the left
+              "toggleProperties": "Toggle properties", // Button to open or close the properties panel on the right
+              "resetViewTip": "Reset view", // Button to reset the viewer to initial state
+              "toggle2d3dTip": "Toggle 2D/3D", // Button to toggle between 3D view and 2D plan view modes
+              "togglePerspectiveTip": "Toggle Perspective/Ortho", // Button to toggle between perspective and orthographic projection
+              "viewFitTip": "View fit", // Button to position the camera to fit all objects in view
+              "firstPersonTip": "Toggle first person navigation mode", // Button to switch between first-person and orbit navigation modes
+              "hideObjectsTip": "Hide objects", // Button to activate "Hide objects" tool
+              "selectObjectsTip": "Select objects", // Button to activate "Select objects" tool
+              "queryObjectsTip": "Query objects", // Button to activate "Query objects" tool
+              "sliceObjectsTip": "Slice objects", // Button to activate "Slice objects" tool
+              "slicesMenuTip": "Slices menu", // Button to open the pull-down menu of existing section planes
+              "showSpacesTip": "Show IFCSpaces", //Button to show IFC spaces
+              "numSlicesTip": "Number of existing slices" // Label shows number of sexisting section planes
+          },
+          "canvasContextMenu": { // Context menu that appears when we right-click on empty canvas space
+              "viewFitAll": "View Fit All", // Menu option to position the camera to fit all objects in view
+              "hideAll": "Hide All", // Menu option to hide all objects
+              "showAll": "Show All", // Menu option to show all objects
+              "xRayAll": "X-Ray All", // Menu option to X-ray all objects
+              "xRayNone": "X-Ray None", // Menu option to remove X-ray effect from all objects
+              "selectNone": "Select None", // Menu option to clear any currently selected objects
+              "resetView": "Reset View", // Menu option to reset the view to initial state
+              "clearSlices": "Clear Slices" // Menu option to delete all section planes created with the Slice tool
+          },
+          "modelsContextMenu": { // Context menu that appears when we right-click on a model in the "Models" tab
+              "loadModel": "Load",
+              "unloadModel": "Unload",
+              "editModel": "Edit",
+              "deleteModel": "Delete",
+              "loadAllModels": "Load All",
+              "unloadAllModels": "Unload All",
+              "clearSlices": "Clear Slices"
+          },
+          "objectContextMenu": { // Context menu that appears when we right-click on an object in the 3D view
+              "inspectProperties": "Inspect Properties", //menu option to inspect properties in the properties inspector
+              "viewFit": "View Fit", // Menu option to position the camera to fit the object in view
+              "viewFitAll": "View Fit All", // Menu option to position the camera to fit all objects in view
+              "showInTree": "Show in Explorer", // Menu option to show the object in the Objects tab's tree
+              "hide": "Hide", // Menu option to hide this object
+              "hideOthers": "Hide Others", // Menu option to hide other objects
+              "hideAll": "Hide All", // Menu option to hide all objects
+              "showAll": "Show All", // Menu option to show all objects
+              "xray": "X-Ray", // Menu option to X-ray this object
+              "xrayOthers": "X-Ray Others", // Menu option to undo X-ray on all other objects
+              "xrayAll": "X-Ray All", // Menu option to X-ray all objects
+              "xrayNone": "X-Ray None", // Menu option to remove X-ray effect from all objects
+              "select": "Select", // Menu option to select this object
+              "undoSelect": "Undo Select", // Menu option to deselect this object
+              "selectNone": "Select None", // Menu option to deselect all objects
+              "clearSlices": "Clear Slices" // Menu option to delete all slices made with the Slicing tool
+          },
+          "treeViewContextMenu": { // Context menu that appears when we right-click an object node in the tree within in the "Objects" tab
+              "inspectProperties": "Inspect Properties", //menu option to inspect properties in the properties inspector
+              "viewFit": "View Fit", // Menu option to position the camera to fit the object in view
+              "viewFitAll": "View Fit All", // Menu option to position the camera to fit all objects in view
+              "isolate": "Isolate", // Menu option to hide all other objects and fit this object in view
+              "hide": "Hide", // Menu option to hide this object
+              "hideOthers": "Hide Others", // Menu option to hide other objects
+              "hideAll": "Hide All", // Menu option to hide all objects
+              "show": "Show", // Menu option to show this object
+              "showOthers": "Show Others", // Menu option to hide this object and show all others
+              "showAll": "Show All", // Menu option to show all objects
+              "xray": "X-Ray", // Menu option to X-ray this object
+              "undoXray": "Undo X-Ray", // Menu option to undo X-ray on this object
+              "xrayOthers": "X-Ray Others", // Menu option to undo X-ray on all other objects
+              "xrayAll": "X-Ray All", // Menu option to X-ray all objects
+              "xrayNone": "X-Ray None", // Menu option to remove X-ray effect from all objects
+              "select": "Select", // Menu option to select this object
+              "undoSelect": "Undo Select", // Menu option to deselect this object
+              "selectNone": "Select None", // Menu option to deselect all objects
+              "clearSlices": "Clear Slices" // Menu option to delete all slices made with the Slicing tool
+          },
+          "sectionToolContextMenu": { // Context menu that appears when we right-click an the Slicing tool
+              "slice": "Slice", // Title of submenu for each slice, eg. "Slice #0, Slice #1" etc
+              "clearSlices": "Clear Slices", // Menu option to delete all slices
+              "flipSlices": "Flip Slices", // Menu option to reverse the cutting direction of all slices
+              "edit": "Edit", // Sub-menu option to edit a single slice
+              "flip": "Flip", // Sub-menu option to reverse the cutting direction of a single slice
+              "delete": "Delete" // Sub-menu option to delete a single slice
+          }
+      },
+
+      // German
+
+      "de": {
+          "busyModal": { // The dialog that appears in the center of the canvas while we are loading a model
+              "loading": "Laden von" // Loading <myModel>
+          },
+          "NavCube": { // The 3D navigation cube at the bottom right of the canvas
+              "front": "Vorne",
+              "back": "Hinten",
+              "top": "Oben",
+              "bottom": "Unten",
+              "left": "Links",
+              "right": "Rechts"
+          },
+          "modelsExplorer": { // The "Models" tab on the left of the canvas
+              "title": "Modelle",
+              "loadAll": "Alle laden",
+              "loadAllTip": "Alle Modelle in diesem Projekt laden",
+              "unloadAll": "Alle abwählen",
+              "unloadAllTip": "Alle Modelle abwählen",
+              "add": "Hinzufügen",
+              "addTip": "Modell hinzufügen"
+          },
+          "objectsExplorer": { // The "Objects" tab on the left of the canvas
+              "title": "Objekte",
+              "showAll": "Alle anzeigen",
+              "showAllTip": "Alle Objekte anzeigen",
+              "hideAll": "Alle ausblenden",
+              "hideAllTip": "Alle Objekte ausblenden"
+          },
+          "classesExplorer": { // The "Classes" tab on the left of the canvas
+              "title": "Typen",
+              "showAll": "Alle anzeigen",
+              "showAllTip": "Alle Typen anzeigen",
+              "hideAll": "Alle ausblenden",
+              "hideAllTip": "Alle Typen ausblenden"
+          },
+          "storeysExplorer": { // The "Storeys" tab on the left of the canvas
+              "title": "Stockwerke",
+              "showAll": "Alle anzeigen",
+              "showAllTip": "Alle Stockwerke anzeigen",
+              "hideAll": "Alle ausblenden",
+              "hideAllTip": "Alle Stockwerke ausblenden"
+          },
+          "propertiesInspector": { // The "Properties" tab on the right of the canvas
+              "title": "Eigenschaften",
+              "noObjectSelectedWarning": "Kein Objekt inspiziert. Klicken Sie mit der rechten Maustaste auf ein Objekt oder führen Sie einen langen Tabulator aus und wählen Sie \'Eigenschaften prüfen\', um die Eigenschaften des Objekts anzuzeigen.",
+              "noPropSetWarning": "Keine Eigenschaftssätze für dieses Objekt gefunden."
+          },
+          "toolbar": { // The toolbar at the top of the canvas
+              "toggleExplorer": "Explorer ein- und ausblenden", // Button to open or close the explorer panel on the left
+              "toggleProperties": "Eigenschaften ein- und ausblenden", // Button to open or close the properties panel on the right
+              "resetViewTip": "Ansicht zurücksetzen", // Button to reset the viewer to initial state
+              "toggle2d3dTip": "2D/3D umschalten", // Button to toggle between 2D and 3D viewing modes
+              "togglePerspectiveTip": "Orthogonale/Perspektivische Ansicht umschalten", // Buttons to toggle between orthographic and perspective projection modes
+              "viewFitTip": "In Ansicht einpassen", // Button to fit everything in view
+              "firstPersonTip": "Ich-Perspektive umschalten", // Button to toggle between first-person and orbiting camera navigation
+              "hideObjectsTip": "Objekte ausblenden", // Button to activate/deactivate the Hide Objects tool
+              "selectObjectsTip": "Objekte auswählen", // Button to activate/deactivate "Select objects" tool
+              "queryObjectsTip": "Abfrageobjekte", // Button to activate/deactivate "Query objects" tool
+              "sliceObjectsTip": "Objekte schneiden", // Button to activate/deactivate "Slice objects" tool
+              "slicesMenuTip": "Menü Schnittebenen", // Button to open the pull-down menu of existing section planes
+              "showSpacesTip": "IFC-Räume anzeigen", //Button to show IFC spaces
+              "numSlicesTip": "Anzahl der Schnittebenen" // Label shows number of existing section planes
+          },
+          "canvasContextMenu": { // Context menu that appears when we right-click on empty canvas space
+              "viewFitAll": "In Ansicht einpassen", // Menu option to position the camera to fit all objects in view
+              "hideAll": "Alle ausblenden", // Menu option to hide all objects
+              "showAll": "Alle anzeigen", // Menu option to show all objects
+              "xRayAll": "Röntgenansicht (alle)", // Menu option to X-ray all objects
+              "xRayNone": "Röntgenansicht (keine)", // Menu option to remove X-ray effect from all objects
+              "selectNone": "Alle abwählen", // Menu option to clear any currently selected objects
+              "resetView": "Ansicht zurücksetzen", // Menu option to reset the view to initial state
+              "clearSlices": "Schnittebenen löschen" // Menu option to delete all section planes created with the Slice tool
+          },
+          "modelsContextMenu": { // Context menu that appears when we right-click on a model in the "Models" tab
+              "loadModel": "Laden", // Menu option to load a model
+              "unloadModel": "Abwählen", // Menu option to unload a model
+              "editModel": "Bearbeiten", // Menu option to edit a model (re-upload its IFC file)
+              "deleteModel": "Löschen", // Menu option to delete a model
+              "loadAllModels": "Alle laden", // Menu option to load all available models
+              "unloadAllModels": "Alle abwählen", // Menu option to unload all available models
+              "clearSlices": "Schnittebenen löschen" // Menu option to delete all slices made with the Slicing tool
+          },
+          "objectContextMenu": { // Context menu that appears when we right-click on an object in the 3D view
+              "inspectProperties": "Eigenschaften prüfen", //menu option to inspect properties in the properties inspector
+              "viewFit": "Objekt in Ansicht einpassen", // Menu option to position the camera to fit the right-clicked object in view
+              "viewFitAll": "Alle in Ansicht einpassen", // Menu option to position the camera to fit all objects in view
+              "showInTree": "Im Baum anzeigen", // Menu option to show the right-clicked object in the Objects tab's tree
+              "hide": "Ausblenden", // Menu option to hide the right-clicked object
+              "hideOthers": "Andere ausblenden", // Menu option to hide all objects except the right-clicked object
+              "hideAll": "Alle ausblenden", // Menu option to hide all objects
+              "showAll": "Alle anzeigen", // Menu option to show all objects
+              "xray": "Röntgenansicht", // Menu option to X-ray the right-clicked object
+              "xrayOthers": "Röntgenansicht (andere)", // Menu option to X-ray all objects except the right-clicked object
+              "xrayAll": "Röntgenansicht (alle)", // Menu option to X-ray all objects
+              "xrayNone": "Röntgenansicht (keine)",  // Menu option to undo X-ray on all objects
+              "select": "Auswählen",  // Menu option to select the right-clicked object
+              "undoSelect": "Abwählen",  // Menu option to unselect the right-clicked object
+              "selectNone": "Alle abwählen", // Menu option to unselect all objects
+              "clearSlices": "Schnittebenen löschen" // Menu option to delete all slices
+          },
+          "treeViewContextMenu": { // Context menu that appears when we right-click an object node in the tree within in the "Objects" tab
+              "inspectProperties": "Eigenschaften prüfen", //menu option to inspect properties in the properties inspector
+              "viewFit": "Objekt in Ansicht einpassen", // Menu option to position the camera to fit the object in view
+              "viewFitAll": "Alle in Ansicht einpassen", // Menu option to position the camera to fit all objects in view
+              "isolate": "Isolieren", // Menu option to hide all other objects and fit this object in view
+              "hide": "Ausblenden", // Menu option to hide this object
+              "hideOthers": "Andere ausblenden", // Menu option to hide other objects
+              "hideAll": "Alle ausblenden", // Menu option to hide all objects
+              "show": "Anzeigen", // Menu option to show this object
+              "showOthers": "Andere anzeigen", // Menu option to hide this object and show all others
+              "showAll": "Alle anzeigen", // Menu option to show all objects
+              "xray": "Röntgenansicht", // Menu option to X-ray this object
+              "undoXray": "Röntgenansicht rückgängig machen", // Menu option to undo X-ray on this object
+              "xrayOthers": "Röntgenansicht (andere)", // Menu option to undo X-ray on all other objects
+              "xrayAll": "Röntgenansicht (alle)", // Menu option to X-ray all objects
+              "xrayNone": "Röntgenansicht (keine)", // Menu option to remove X-ray effect from all objects
+              "select": "Auswählen", // Menu option to select this object
+              "undoSelect": "Abwählen", // Menu option to deselect this object
+              "selectNone": "Alle abwählen", // Menu option to deselect all objects
+              "clearSlices": "Schnittebenen löschen" // Menu option to delete all slices made with the Slicing tool
+          },
+          "sectionToolContextMenu": { // Context menu that appears when we right-click an the Slicing tool
+              "slice": "Schnitte", // Title of submenu for each slice, eg. "Slice #0, Slice #1" etc
+              "clearSlices": "Schnittebenen löschen", // Menu option to delete all slices
+              "flipSlices": "Schnittebenen umdrehen", // Menu option to reverse the cutting direction of all slices
+              "edit": "Bearbeiten", // Sub-menu option to edit a single slice
+              "flip": "Umdrehen", // Sub-menu option to reverse the cutting direction of a single slice
+              "delete": "Löschen" // Sub-menu option to delete a single slice
+          }
+      },
+
+      // French
+
+      "fr": {
+          "busyModal": { // The dialog that appears in the center of the canvas while we are loading a model
+              "loading": "Chargement" // Loading <myModel>
+          },
+          "NavCube": { // The 3D navigation cube at the bottom right of the canvas
+              "front": "Face",
+              "back": "Arrière",//alternative: Dos
+              "top": "Dessus",
+              "bottom": "Dessous",
+              "left": "Droite",
+              "right": "Gauche"
+          },
+          "modelsExplorer": { // The "Models" tab on the left of the canvas
+              "title": "Modèles",
+              "loadAll": "Afficher tout",
+              "loadAllTip": "Afficher tous les modèles du projet",
+              "unloadAll": "Masquer tout",
+              "unloadAllTip": "Masquer tous les modèles",
+              "add": "Ajouter",
+              "addTip": "Ajouter un modèle"
+          },
+          "objectsExplorer": { // The "Objects" tab on the left of the canvas
+              "title": "Conteneurs",
+              "showAll": "Afficher tout",
+              "showAllTip": "Afficher tous les objets",
+              "hideAll": "Masquer tout",
+              "hideAllTip": "Masquer tous les objets"
+          },
+          "classesExplorer": { // The "Classes" tab on the left of the canvas
+              "title": "Classes IFC",
+              "showAll": "Afficher tout",
+              "showAllTip": "Affiche toutes les classes",
+              "hideAll": "Masquer tout",
+              "hideAllTip": "Masquer toutes les classes"
+          },
+          "storeysExplorer": { // The "Storeys" tab on the left of the canvas
+              "title": "Étages",
+              "showAll": "Afficher tout",
+              "showAllTip": "Afficher tous les étages",
+              "hideAll": "Masquer tout",
+              "hideAllTip": "Masquer tous les étages"
+          },
+          "propertiesInspector": { // The "Properties" tab on the right of the canvas
+              "title": "Propriétés",
+              "noObjectSelectedWarning": "Aucun objet n'a été inspecté. Cliquez avec le bouton droit ou le bouton long sur un objet et sélectionnez \'Inspecter les propriétés\' pour afficher ses propriétés ici.",
+              "noPropSetWarning": "Aucun ensemble de propriétés n'a été trouvé pour cet objet."
+          },
+          "toolbar": { // The toolbar at the top of the canvas
+              "toggleExplorer": "Afficher la structure", // Button to open or close the explorer panel on the left
+              "toggleProperties": "Afficher les propriétés", // Button to open or close the properties panel on the right
+              "resetViewTip": "Réinitialiser la vue", // Button to reset the viewer to initial state
+              "toggle2d3dTip": "Activer 2D/3D", // Button to toggle between 3D view and 2D plan view modes
+              "togglePerspectiveTip": "Activer Perspective/Ortho", // Button to toggle between perspective and orthographic projection
+              "viewFitTip": "Recadrer la vue", // Button to position the camera to fit all objects in view
+              "firstPersonTip": "Mode 1ere personne", // Button to switch between first-person and orbit navigation modes
+              "hideObjectsTip": "Masquer objets", // Button to activate "Hide objects" tool
+              "selectObjectsTip": "Sélectionner", // Button to activate "Select objects" tool
+              "queryObjectsTip": "Informations objets", // Button to activate "Query objects" tool
+              "sliceObjectsTip": "Coupes", // Button to activate "Slice objects" tool
+              "slicesMenuTip": "Outils de coupe", // Button to open the pull-down menu of existing section planes
+              "showSpacesTip": "Afficher les espaces IFC", //Button to show IFC spaces
+              "numSlicesTip": "Nombre de coupes" // Label shows number of sexisting section planes
+          },
+          "canvasContextMenu": { // Context menu that appears when we right-click on empty canvas space
+              "viewFitAll": "Recadrer tout", // Menu option to position the camera to fit all objects in view
+              "hideAll": "Masquer tout", // Menu option to hide all objects
+              "showAll": "Afficher tout", // Menu option to show all objects
+              "xRayAll": "X-Ray tout", // Menu option to X-ray all objects
+              "xRayNone": "X-Ray aucun", // Menu option to remove X-ray effect from all objects
+              "selectNone": "Réinitialiser sélection", // Menu option to clear any currently selected objects
+              "resetView": "Réinitialiser la vue", // Menu option to reset the view to initial state
+              "clearSlices": "Effacer les coupes" // Menu option to delete all section planes created with the Slice tool
+          },
+          "modelsContextMenu": { // Context menu that appears when we right-click on a model in the "Models" tab
+              "loadModel": "Charger",
+              "unloadModel": "Retirer",
+              "editModel": "Editer",
+              "deleteModel": "Supprimer",
+              "loadAllModels": "Tout charger",
+              "unloadAllModels": "Tout retirer",
+              "clearSlices": "Effacer les coupes"
+          },
+          "objectContextMenu": { // Context menu that appears when we right-click on an object in the 3D view
+              "inspectProperties": "Inspecter les propriétés", //menu option to inspect properties in the properties inspector
+              "viewFit": "Recadrer objet", // Menu option to position the camera to fit the object in view
+              "viewFitAll": "Recadrer la vue", // Menu option to position the camera to fit all objects in view
+              "showInTree": "Afficher arborescence", // Menu option to show the object in the Objects tab's tree
+              "hide": "Masquer", // Menu option to hide this object
+              "hideOthers": "Isoler l'objet", // Menu option to hide other objects
+              "hideAll": "Tout masquer", // Menu option to hide all objects
+              "showAll": "Tout afficher", // Menu option to show all objects
+              "xray": "X-Ray", // Menu option to X-ray this object
+              "xrayOthers": "X-Ray autres", // Menu option to undo X-ray on all other objects
+              "xrayAll": "X-Ray tout", // Menu option to X-ray all objects
+              "xrayNone": "X-Ray aucun", // Menu option to remove X-ray effect from all objects
+              "select": "Sélectionner", // Menu option to select this object
+              "undoSelect": "Annuler sélection", // Menu option to deselect this object
+              "selectNone": "Réinitialiser sélection", // Menu option to deselect all objects
+              "clearSlices": "Effacer les coupes" // Menu option to delete all slices made with the Slicing tool
+          },
+          "treeViewContextMenu": { // Context menu that appears when we right-click an object node in the tree within in the "Objects" tab
+              "inspectProperties": "Inspecter les propriétés", //menu option to inspect properties in the properties inspector
+              "viewFit": "Recadrer objet", // Menu option to position the camera to fit the object in view
+              "viewFitAll": "Recadrer la vue", // Menu option to position the camera to fit all objects in view
+              "isolate": "Isoler", // Menu option to hide all other objects and fit this object in view
+              "hide": "Masquer", // Menu option to hide this object
+              "hideOthers": "Masquer autres", // Menu option to hide other objects
+              "hideAll": "Masquer tout", // Menu option to hide all objects
+              "show": "Afficher", // Menu option to show this object
+              "showOthers": "Afficher les autres", // Menu option to hide this object and show all others
+              "showAll": "Afficher tout", // Menu option to show all objects
+              "xray": "X-Ray", // Menu option to X-ray this object
+              "undoXray": "Annuler X-Ray", // Menu option to undo X-ray on this object
+              "xrayOthers": "X-Ray autres", // Menu option to undo X-ray on all other objects
+              "xrayAll": "X-Ray tout", // Menu option to X-ray all objects
+              "xrayNone": "X-Ray aucun", // Menu option to remove X-ray effect from all objects
+              "select": "Sélectionner", // Menu option to select this object
+              "undoSelect": "Annuler sélection", // Menu option to deselect this object
+              "selectNone": "Réinitialiser sélection", // Menu option to deselect all objects
+              "clearSlices": "Effacer les coupes" // Menu option to delete all slices made with the Slicing tool
+          },
+          "sectionToolContextMenu": { // Context menu that appears when we right-click an the Slicing tool
+              "slice": "Coupe", // Title of submenu for each slice, eg. "Slice #0, Slice #1" etc
+              "clearSlices": "Effacer les coupes", // Menu option to delete all slices
+              "flipSlices": "Inverser les coupes", // Menu option to reverse the cutting direction of all slices
+              "edit": "Editer", // Sub-menu option to edit a single slice
+              "flip": "Inverser", // Sub-menu option to reverse the cutting direction of a single slice
+              "delete": "Supprimer" // Sub-menu option to delete a single slice
+          }
+      },
+
+      //Polish
+
+      "pl": {
+          "busyModal": { // The dialog that appears in the center of the canvas while we are loading a model
+              "loading": "Ładowanie" // Loading <myModel>
+          },
+          "NavCube": { // The 3D navigation cube at the bottom right of the canvas
+              "front": "Przód",
+              "back": "Tył",
+              "top": "Góra",
+              "bottom": "Dół",
+              "left": "Lewy",
+              "right": "Prawy"
+          },
+          "modelsExplorer": { // The "Models" tab on the left of the canvas
+              "title": "Model",
+              "loadAll": "Załaduj",
+              "loadAllTip": "Załaduj wszystkie modele",
+              "unloadAll": "Zamknij",
+              "unloadAllTip": "Zamnij wszystkie modele",
+              "add": "Dodaj",
+              "addTip": "Dodaj modele"
+          },
+          "objectsExplorer": { // The "Objects" tab on the left of the canvas
+              "title": "Obiekty",
+              "showAll": "Pokaż",
+              "showAllTip": "Pokaż wszystkie obiekty",
+              "hideAll": "Ukryj",
+              "hideAllTip": "Ukryj wszystkie obiekty"
+          },
+          "classesExplorer": { // The "Classes" tab on the left of the canvas
+              "title": "Typy",
+              "showAll": "Pokaż",
+              "showAllTip": "Pokaż wszystkie typy",
+              "hideAll": "Ukryj",
+              "hideAllTip": "Ukryj wszystkie typy"
+          },
+          "storeysExplorer": { // The "Storeys" tab on the left of the canvas
+              "title": "Piętra",
+              "showAll": "Pokaż",
+              "showAllTip": "Pokaż wszystkie piętra",
+              "hideAll": "Ukryj",
+              "hideAllTip": "Ukryj wszystkie piętra"
+          },
+          "propertiesInspector": { // The "Properties" tab on the right of the canvas
+              "title": "Właściwości",
+              "noObjectSelectedWarning": "Nie sprawdzono żadnego obiektu. Kliknij prawym przyciskiem myszy lub kliknij długo na obiekcie i wybierz opcję \'Sprawdź właściwości\', aby wyświetlić jego właściwości.",
+              "noPropSetWarning": "Nie znaleziono żadnych zestawów właściwości dla tego obiektu."
+          },
+          "toolbar": { // The toolbar at the top of the canvas
+              "toggleExplorer": "Przełączanie eksploratora", // Button to open or close the explorer panel on the left
+              "toggleProperties": "Przełączanie właściwości", // Button to open or close the properties panel on the right
+              "resetViewTip": "Resetuj widok", // Button to reset the voewer to initial state
+              "toggle2d3dTip": "Widok 2D/3D", // Button to toggle between 2D and 3D viewing modes
+              "togglePerspectiveTip": "Widok Ortograficzny/Perspektywiczny", // Buttons to toggle between orthographic and perspective projection modes
+              "viewFitTip": "Dopasowanie do widoku", // Button to fit everything in view
+              "firstPersonTip": "Widok perspektywy pierwszoosobowej", // Button to toggle between first-person and orbiting camera navigation
+              "hideObjectsTip": "Ukryj obiekt", // Button to activate/deactivate the Hide Objects tool
+              "selectObjectsTip": "Zaznacz obiekt", // Button to activate/deactivate "Select objects" tool
+              "queryObjectsTip": "Wywołaj obiekt", // Button to activate/deactivate "Query objects" tool
+              "sliceObjectsTip": "Przekroje obiektów", // Button to activate/deactivate "Slice objects" tool
+              "slicesMenuTip": "Menu przekroi", // Button to open the pull-down menu of existing section planes
+              "showSpacesTip": "Pokaż przestrzenie IFC", //Button to show IFC spaces
+              "numSlicesTip": "Liczba przekroi" // Label shows number of existing section planes
+          },
+          "canvasContextMenu": { // Context menu that appears when we right-click on empty canvas space
+              "viewFitAll": "Dopasuj widok do modelu", // Menu option to position the camera to fit all objects in view
+              "hideAll": "Ukryj wszystkie", // Menu option to hide all objects
+              "showAll": "Pokaż wszystkie", // Menu option to show all objects
+              "xRayAll": "Prześwietl wszystko", // Menu option to X-ray all objects
+              "xRayNone": "Usuń prześwietlenia", // Menu option to remove X-ray effect from all objects
+              "selectNone": "Usuń zaznaczenia", // Menu option to clear any currently selected objects
+              "resetView": "Zresetuj widok", // Menu option to reset the view to initial state
+              "clearSlices": "Usuń przekroje" // Menu option to delete all section planes created with the Slice tool
+          },
+          "modelsContextMenu": { // Context menu that appears when we right-click on a model in the "Models" tab
+              "loadModel": "Załaduj", // Menu option to load a model
+              "unloadModel": "Zamknij", // Menu option to unload a model
+              "editModel": "Edytuj", // Menu option to edit a model (re-upload its IFC file)
+              "deleteModel": "Usuń", // Menu option to delete a model
+              "loadAllModels": "Załaduj wszystkie", // Menu option to load all available models
+              "unloadAllModels": "Zamknij wszystkie", // Menu option to unload all available models
+              "clearSlices": "Usuń przekroje" // Menu option to delete all slices made with the Slicing tool
+          },
+          "objectContextMenu": { // Context menu that appears when we right-click on an object in the 3D view
+              "inspectProperties": "Sprawdź właściwości", //menu option to inspect properties in the properties inspector
+              "viewFit": "Dopasuj widok do obiektu", // Menu option to position the camera to fit the right-clicked object in view
+              "viewFitAll": "Dopasuj widok do modelu", // Menu option to position the camera to fit all objects in view
+              "showInTree": "Pokaż w widoku drzewa", // Menu option to show the right-clicked object in the Objects tab's tree
+              "hide": "Ukryj", // Menu option to hide the right-clicked object
+              "hideOthers": "Ukryj pozostałe", // Menu option to hide all objects except the right-clicked object
+              "hideAll": "Ukryj wszystkie", // Menu option to hide all objects
+              "showAll": "Pokaż wszystkie", // Menu option to show all objects
+              "xray": "Prześwietl", // Menu option to X-ray the right-clicked object
+              "xrayOthers": "Prześwietl pozostałe", // Menu option to X-ray all objects except the right-clicked object
+              "xrayAll": "Prześwietl wszystkie", // Menu option to X-ray all objects
+              "xrayNone": "Usuń prześwietlenia",  // Menu option to undo X-ray on all objects
+              "select": "Zaznacz",  // Menu option to select the right-clicked object
+              "undoSelect": "Usuń zaznaczenie",  // Menu option to unselect the right-clicked object
+              "selectNone": "Usuń wszystkie zaznaczenia", // Menu option to unselect all objects
+              "clearSlices": "Usuń przekroje" // Menu option to delete all slices
+          },
+          "treeViewContextMenu": { // Context menu that appears when we right-click an object node in the tree within in the "Objects" tab
+              "inspectProperties": "Sprawdź właściwości", //menu option to inspect properties in the properties inspector
+              "viewFit": "Dopasuj widok do obiektu", // Menu option to position the camera to fit the object in view
+              "viewFitAll": "Dopasuj widok do modelu", // Menu option to position the camera to fit all objects in view
+              "isolate": "Wyizoluj", // Menu option to hide all other objects and fit this object in view
+              "hide": "Ukryj", // Menu option to hide this object
+              "hideOthers": "Ukryj pozostałe", // Menu option to hide other objects
+              "hideAll": "Ukryj wszystkie", // Menu option to hide all objects
+              "show": "Pokaż", // Menu option to show this object
+              "showOthers": "Pokaż pozostałe", // Menu option to hide this object and show all others
+              "showAll": "Pokaż wszystkie", // Menu option to show all objects
+              "xray": "Prześwietl", // Menu option to X-ray this object
+              "undoXray": "Cofnij prześwietlenie", // Menu option to undo X-ray on this object
+              "xrayOthers": "Prześwietl pozostałe", // Menu option to undo X-ray on all other objects
+              "xrayAll": "Prześwietl wszystkie", // Menu option to X-ray all objects
+              "xrayNone": "Usuń prześwietlenia", // Menu option to remove X-ray effect from all objects
+              "select": "Wählen", // Menu option to select this object
+              "undoSelect": "Zaznacz", // Menu option to deselect this object
+              "selectNone": "Usuń wszystkie zaznaczenia", // Menu option to deselect all objects
+              "clearSlices": "Usuń przekroje" // Menu option to delete all slices made with the Slicing tool
+          },
+          "sectionToolContextMenu": { // Context menu that appears when we right-click an the Slicing tool
+              "clearSlices": "Usuń przekroje", // Menu option to delete all slices
+              "flipSlices": "Zmień kierunek", // Menu option to reverse the cutting direction of all slices
+              "edit": "Edytuj", // Sub-menu option to edit a single slice
+              "flip": "Obróć", // Sub-menu option to reverse the cutting direction of a single slice
+              "delete": "Usuń" // Sub-menu option to delete a single slice
+          }
+      },
+
+      // Russian
+
+      "ru": {
+          "busyModal": {
+              // The dialog that appears in the center of the canvas while we are loading a model
+              "loading": "Загрузка", // Loading <myModel>
+          },
+          "NavCube": {
+              // The 3D navigation cube at the bottom right of the canvas
+              "front": "Фронт",
+              "back": "Тыл",
+              "top": "Верх",
+              "bottom": "Низ",
+              "left": "Лево",
+              "right": "Право",
+          },
+          "modelsExplorer": {
+              // The "Models" tab on the left of the canvas
+              "title": "Модели",
+              "loadAll": "Загрузить все",
+              "loadAllTip": "Загрузить все модели в этом проекте",
+              "unloadAll": "Выгрузить все",
+              "unloadAllTip": "Выгрузить все модели",
+              "add": "Добавить",
+              "addTip": "Добавить модель",
+          },
+          "objectsExplorer": {
+              // The "Objects" tab on the left of the canvas
+              "title": "Объекты",
+              "showAll": "Показать все",
+              "showAllTip": "Показать все объекты",
+              "hideAll": "Скрыть все",
+              "hideAllTip": "Скрыть все объекты",
+          },
+          "classesExplorer": {
+              // The "Classes" tab on the left of the canvas
+              "title": "Классы",
+              "showAll": "Показать все",
+              "showAllTip": "Показать все классы",
+              "hideAll": "Скрыть все",
+              "hideAllTip": "Скрыть все классы",
+          },
+          "storeysExplorer": {
+              // The "Storeys" tab on the left of the canvas
+              "title": "Этажи",
+              "showAll": "Показать все",
+              "showAllTip": "Показать все этажи",
+              "hideAll": "Скрыть все",
+              "hideAllTip": "Скрыть все этажи",
+          },
+          "propertiesInspector": {
+              // The "Properties" tab on the right of the canvas
+              "title": "Свойства",
+              "noObjectSelectedWarning": "Ни один объект не осмотрен. Щелкните правой кнопкой мыши или длинной меткой на объекте и выберите \'Осмотреть свойства\', чтобы просмотреть его свойства здесь.",
+              "noPropSetWarning": "Для этого объекта не найдено ни одного набора свойств."
+          },
+          "toolbar": {
+              // The toolbar at the top of the canvas
+              "toggleExplorer": "Переключить навигатор", // Button to open or close the explorer panel on the left
+              "toggleProperties": "Переключить Свойства", // Button to open or close the properties panel on the right
+              "resetViewTip": "Сбросить вид", // Button to reset the viewer to initial state
+              "toggle2d3dTip": "Переключить 2D/3D", // Button to toggle between 3D view and 2D plan view modes
+              "togglePerspectiveTip": "Переключить проекцию перспектива/орто", // Button to toggle between perspective and orthographic projection
+              "viewFitTip": "Показать всю модель", // Button to position the camera to fit all objects in view
+              "firstPersonTip": "Переключить режим навигации от первого лица", // Button to switch between first-person and orbit navigation modes
+              "hideObjectsTip": "Скрыть объекты", // Button to activate "Hide objects" tool
+              "selectObjectsTip": "Выбрать объекты", // Button to activate "Select objects" tool
+              "queryObjectsTip": "Выбрать объекты", // Button to activate "Query objects" tool
+              "sliceObjectsTip": "Рассечь объекты", // Button to activate "Slice objects" tool
+              "slicesMenuTip": "Меню сечений", // Button to open the pull-down menu of existing section planes
+              "showSpacesTip": "Показать места IFC", //Button to show IFC spaces
+              "numSlicesTip": "Количество существующих сечений", // Label shows number of sexisting section planes
+          },
+          "canvasContextMenu": {
+              // Context menu that appears when we right-click on empty canvas space
+              "viewFitAll": "Вид включающий все", // Menu option to position the camera to fit all objects in view
+              "hideAll": "Скрыть все", // Menu option to hide all objects
+              "showAll": "Показать все", // Menu option to show all objects
+              "xRayAll": "Рентген все", // Menu option to X-ray all objects
+              "xRayNone": "Очистить рентген", // Menu option to remove X-ray effect from all objects
+              "selectNone": "Очистить выбор", // Menu option to clear any currently selected objects
+              "resetView": "Сбросить вид", // Menu option to reset the view to initial state
+              "clearSlices": "Очистить сечения", // Menu option to delete all section planes created with the Slice tool
+          },
+          "modelsContextMenu": {
+              // Context menu that appears when we right-click on a model in the "Models" tab
+              "loadModel": "Загрузить",
+              "unloadModel": "Выгрузить",
+              "editModel": "Редактировать",
+              "deleteModel": "Удалить",
+              "loadAllModels": "Загрузить все",
+              "unloadAllModels": "Выгрузить все",
+              "clearSlices": "Очистить сечения",
+          },
+          "objectContextMenu": {
+              // Context menu that appears when we right-click on an object in the 3D view
+              "inspectProperties": "Осмотреть свойства", //menu option to inspect properties in the properties inspector
+              "viewFit": "Показать весь объект", // Menu option to position the camera to fit the object in view
+              "viewFitAll": "Показать все объекты", // Menu option to position the camera to fit all objects in view
+              "showInTree": "Показать в навигаторе", // Menu option to show the object in the Objects tab"s tree
+              "hide": "Скрыть", // Menu option to hide this object
+              "hideOthers": "Скрыть другие", // Menu option to hide other objects
+              "hideAll": "Скрыть все", // Menu option to hide all objects
+              "showAll": "Показать все", // Menu option to show all objects
+              "xray": "Рентген", // Menu option to X-ray this object
+              "xrayOthers": "Рентген остальные", // Menu option to undo X-ray on all other objects
+              "xrayAll": "Рентген все", // Menu option to X-ray all objects
+              "xrayNone": "Очистить рентген", // Menu option to remove X-ray effect from all objects
+              "select": "Выбрать", // Menu option to select this object
+              "undoSelect": "Отменить выбор", // Menu option to deselect this object
+              "selectNone": "Очистить выбор", // Menu option to deselect all objects
+              "clearSlices": "Очистить сечения", // Menu option to delete all slices made with the Slicing tool
+          },
+          "treeViewContextMenu": {
+              // Context menu that appears when we right-click an object node in the tree within in the "Objects" tab
+              "inspectProperties": "Осмотреть свойства", //menu option to inspect properties in the properties inspector
+              "viewFit": "Показать весь объект", // Menu option to position the camera to fit the object in view
+              "viewFitAll": "Показать все объекты", // Menu option to position the camera to fit all objects in view
+              "isolate": "Изолировать", // Menu option to hide all other objects and fit this object in view
+              "hide": "Скрыть", // Menu option to hide this object
+              "hideOthers": "Скрыть другие", // Menu option to hide other objects
+              "hideAll": "Скрыть все", // Menu option to hide all objects
+              "show": "Показать", // Menu option to show this object
+              "showOthers": "Показать остальные", // Menu option to hide this object and show all others
+              "showAll": "Показать все", // Menu option to show all objects
+              "xray": "Рентген", // Menu option to X-ray this object
+              "undoXray": "Отменить рентген", // Menu option to undo X-ray on this object
+              "xrayOthers": "Рентген остальные", // Menu option to undo X-ray on all other objects
+              "xrayAll": "Ренген все", // Menu option to X-ray all objects
+              "xrayNone": "Очистить рентген", // Menu option to remove X-ray effect from all objects
+              "select": "Выбрать", // Menu option to select this object
+              "undoSelect": "Отменить выбор", // Menu option to deselect this object
+              "selectNone": "Очистить выбор", // Menu option to deselect all objects
+              "clearSlices": "Очистить сечения", // Menu option to delete all slices made with the Slicing tool
+          },
+          "sectionToolContextMenu": {
+              // Context menu that appears when we right-click an the Slicing tool
+              "slice": "Сечение", // Title of submenu for each slice, eg. "Slice #0, Slice #1" etc
+              "clearSlices": "Очистить сечения", // Menu option to delete all slices
+              "flipSlices": "Развернуть сечения", // Menu option to reverse the cutting direction of all slices
+              "edit": "Редактировать", // Sub-menu option to edit a single slice
+              "flip": "Развернуть", // Sub-menu option to reverse the cutting direction of a single slice
+              "delete": "Удалить", // Sub-menu option to delete a single slice
+          }
+      }
+  };
+
   exports.BIMViewer = BIMViewer;
   exports.LocaleService = LocaleService;
+  exports.RestServer = RestServer;
   exports.Server = Server;
+  exports.messages = messages;
 
   Object.defineProperty(exports, '__esModule', { value: true });
 
